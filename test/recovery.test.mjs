@@ -80,3 +80,19 @@ H.itest("graceful SIGTERM marks running tasks interrupted", async () => {
   assert.equal(res.verdict, "interrupted")
   assert.equal(res.handoff.state, "retryable")
 })
+
+H.itest("a daemon started while the previous one is still stopping waits for it and keeps its own socket", async () => {
+  const r = await rpc("delegate_task", { repo: H.REPO_NAME, task: "MOCK_SCENARIO=slowthendone" })
+  await H.waitFor(rpc, r.task_id, (s) => s.status === "running")
+  await H.sleep(2000)
+  const old = daemon
+  process.kill(old.pid, "SIGTERM") // old daemon removes its socket, then finalizes the running task
+  daemon = await H.startDaemon(env) // must wait for the old process instead of racing it
+  assert.ok(old.exitCode !== null || old.signalCode !== null || !fs.existsSync(`/proc/${old.pid}`), "old daemon exited before the new one listened")
+  await H.sleep(1500)
+  const sock = path.join(env.dataDir, "run", "daemon.sock")
+  assert.ok(fs.existsSync(sock), "the new daemon's socket survived the old daemon's shutdown")
+  assert.equal((await rpc("health", {})).pid, daemon.pid)
+  assert.equal(Number(fs.readFileSync(path.join(env.dataDir, "run", "daemon.pid"), "utf8")), daemon.pid)
+  assert.equal((await rpc("task_status", { task_id: r.task_id })).status, "interrupted")
+})

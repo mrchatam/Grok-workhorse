@@ -48,10 +48,18 @@ can resume it without guessing.
   the handoff it replaced, and the approval that answered it.
 - `cancel_task` on a parked task closes it (status `cancelled`, handoff `closed`).
 - `list_tasks status: "terminal"` also includes parked tasks, since no worker is running.
+- `update_handoff state: "closed"` on a parked task closes it like `cancel_task` / reject without
+  instructions (status `cancelled`, handoff `closed`) instead of unparking it to `completed`.
+- Approvals, handoff updates and closes record `source` (`channel` mcp/cli, `auth`) next to the
+  free-text `by`, so attribution is not only a caller-chosen name.
 
 ### Fixed
 - A task stopped by a graceful daemon shutdown (`workhorse stop`, SIGTERM) was marked `interrupted`
   but never finalized, so it had no result and no handoff. It is now finalized on the next start.
+- The daemon's shutdown removed the socket path unconditionally after finalizing tasks, which could
+  delete the socket of a daemon started in the meantime. It now removes only its own socket (same
+  inode), writes `run/daemon.pid`, and a new daemon waits for a previous one that is still stopping
+  before recovery. `workhorse stop` / `restart` wait for the processes to exit.
 - `cleanup_task` and retention mark a task before their first async step. While its worktree is being
   removed, `continue_task`, `approve_task`, `update_handoff` and a second cleanup are refused instead of
   queueing a run into a worktree that is being deleted.

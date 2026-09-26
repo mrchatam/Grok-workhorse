@@ -182,6 +182,9 @@ test("reject: closes a parked task (worktree kept), or resumes it with instructi
   assert.equal(r2.status, "queued")
   assert.match(u.pending_run.message, /^DENIED by human \(cli\): approve deleting the legacy module\. Do not do that\./)
   assert.match(u.pending_run.message, /deprecate it instead/)
+  // the channel is recorded separately from the free-text `by`
+  assert.deepEqual(u.approvals.at(-1).source, { channel: "cli", auth: "daemon_token" })
+  assert.deepEqual(t.approvals.at(-1).source, { channel: "mcp", auth: "daemon_token" })
 
   const c = await finishedTask({ text: RESULT("needs_approval", "needs: approve X") })
   assert.equal((await mgr.cancel(c.id)).status, "cancelled")
@@ -217,9 +220,19 @@ test("update_handoff: owner/next_action/note, parking by state, validation", asy
   assert.equal(p.handoff.owner, "human")
   assert.equal(p.handoff.updated_by, "human (cli)")
   assert.equal(t.parked_from, "completed")
-  const back = mgr.updateHandoff({ task_id: t.id, state: "closed" })
+  // any other state unparks it back to the previous status
+  const back = mgr.updateHandoff({ task_id: t.id, state: "needs_fix" })
   assert.equal(back.status, "completed")
-  assert.equal(back.handoff.state, "closed")
+  assert.equal(back.handoff.state, "needs_fix")
+  // closing a parked task goes through the same path as reject-without-instructions
+  mgr.updateHandoff({ task_id: t.id, state: "needs_input" })
+  const closed = mgr.updateHandoff({ task_id: t.id, state: "closed", note: "not needed any more" })
+  assert.equal(closed.status, "cancelled")
+  assert.equal(closed.handoff.state, "closed")
+  assert.match(closed.handoff.next_action, /closed by supervisor via update_handoff/)
+  assert.equal(closed.handoff.notes.at(-1).note, "not needed any more")
+  assert.deepEqual(closed.handoff.history.find((x) => x.event === "closed").source, { channel: "mcp", auth: "daemon_token" })
+  assert.equal(t.parked_from, undefined)
   assert.ok(!mgr.list({ status: "needs_attention" }).tasks.some((x) => x.task_id === t.id))
   // validation
   assert.throws(() => mgr.updateHandoff({ task_id: t.id }), /nothing to update/)

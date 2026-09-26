@@ -111,8 +111,11 @@ author. `by` names who is acting (default `supervisor` over MCP, `human (cli)` f
 change goes into `history` and the audit log.
 
 Setting `state` to `needs_approval` or `needs_input` parks a finished task for a human (the owner
-becomes `human` unless you pass one), which also protects its worktree from retention. Setting any
-other state on a parked task unparks it. It goes back to its previous status, or `completed`.
+becomes `human` unless you pass one), which also protects its worktree from retention. Setting
+`state: "closed"` on a parked task closes it exactly like `approve_task decision=reject` without
+instructions or `cancel_task`: status `cancelled`, handoff `closed`, worktree kept (other fields in the
+same call are applied afterwards). Setting any other state on a parked task unparks it. It goes back
+to its previous status, or `completed`.
 `workhorse handoff <id>` without options prints the record and past approvals.
 
 ## Approving or rejecting
@@ -130,6 +133,12 @@ parked, or whose handoff state is `needs_approval`, `needs_input` or `blocked`:
 
 Every decision is stored in `task.approvals` and in the `previous_results` entry of the run it
 answered, and is logged as an `approval` event.
+
+**Attribution.** `by` is free text chosen by the caller. Each approval, handoff update and close
+also records `source`: `channel` (`mcp` for the MCP shim, `cli` for the operator CLI) and `auth`
+(what the daemon actually verified). Both channels use the same daemon socket token, so `channel` is
+what the client declares and `auth` is `daemon_token`; treat neither `by` nor `channel` as proof of
+who acted.
 
 **Approval does not change the sandbox.** It is a decision passed to the worker, not a permission
 grant. The guard and bwrap rules still apply, so a worker still cannot reach the network or install

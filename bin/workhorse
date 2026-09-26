@@ -77,8 +77,16 @@ async function stop() {
   fs.mkdirSync(dirs.run, { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(dirs.run, "stop"), "")
   if (sup) try { process.kill(sup, "SIGTERM") } catch {}
-  for (let i = 0; i < 60 && fs.existsSync(SOCKET_PATH); i++) await wait(500)
-  out("stopped")
+  // Wait for the processes to exit, not just for the socket to go away: a daemon removes its socket
+  // first and then finalizes running tasks, and a successor must not start before it is gone.
+  const { isDaemonPid, daemonPidFromFile } = await import("../lib/daemon.mjs")
+  const dpid = daemonPidFromFile()
+  const alive = (pid) => {
+    try { process.kill(pid, 0); return true } catch (e) { return e.code === "EPERM" }
+  }
+  let i = 0
+  for (; i < 240 && ((sup && alive(sup)) || (dpid && isDaemonPid(dpid))); i++) await wait(250)
+  out(i >= 240 ? `still stopping after 60 s (supervisor ${sup || "-"}, daemon ${dpid || "-"})` : "stopped")
 }
 
 try {
