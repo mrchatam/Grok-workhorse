@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-09-27
 
 Token savings. Workhorse exists to reduce supervisor (for example Grok) usage by letting smaller,
 user-chosen models do bounded work; this release cuts what the supervisor reads and how often it has to
@@ -79,7 +79,10 @@ act, and adds opt-in savers for the workers. Builds on 0.2.0. See [docs/token-sa
 - This branch is rebased onto the 0.2.0 review fixes (restart socket race, closed-on-parked semantics,
   approval source).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-09-27
+
+> **Never published as its own release.** No `v0.2.0` tag was created, so everything below
+> shipped together with [0.3.0] in the `v0.3.0` release.
 
 Task handoff records and a human-approval state, based on community feedback. A supervisor should keep a
 blocked task as blocked, with the failed check, the owner and the exact next action, so a later agent
@@ -173,6 +176,7 @@ First public release.
   locking, a hello-world smoke task and optional systemd; `uninstall.sh`.
 - Draft Grok Bot skills in `grok-template/` (getting started, delegation).
 
-[Unreleased]: https://github.com/mrchatam/Grok-workhorse/compare/v0.1.0...HEAD
-[0.2.0]: https://github.com/mrchatam/Grok-workhorse/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mrchatam/Grok-workhorse/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mrchatam/Grok-workhorse/compare/v0.1.0...v0.3.0
+[0.2.0]: https://github.com/mrchatam/Grok-workhorse/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/mrchatam/Grok-workhorse/releases/tag/v0.1.0

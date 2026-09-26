@@ -25,12 +25,14 @@ Ask **one question at a time** and wait for each answer. Keep it short.
    tests?" Collect a git URL (or local path) and a test command for each.
 5. **Install** (on the chosen machine):
    ```bash
-   git clone https://github.com/mrchatam/Grok-workhorse.git grok-workhorse && cd grok-workhorse
+   git clone --branch v0.3.0 https://github.com/mrchatam/Grok-workhorse.git grok-workhorse && cd grok-workhorse
    sudo --preserve-env=<KEY_NAME> bash scripts/install.sh --provider <nvidia|openrouter|custom>
    ```
    Add `--with-opencode` only if the user wants the OpenCode backend. For `custom`, fill in
    `/opt/grok-workhorse/config/profiles.json` first (unlock-config.sh, edit, `workhorse validate`,
-   lock-config.sh). Show the installer's final summary to the user.
+   lock-config.sh). Show the installer's final summary to the user. The clone is pinned to the tested
+   `v0.3.0` release; to upgrade later, `git checkout main && git pull`, then re-run the installer
+   (it is idempotent).
 6. **Repos.** For each repo: `sudo workhorse add-repo <url> --test "<command>"`.
 7. **Connector.** Register a stdio MCP connector: command `/usr/local/bin/workhorse-mcp`, no args,
    env `{ "<KEY_NAME>": <reference to the stored secret> }`.
