@@ -56,14 +56,24 @@ reached, the verdict was not in `auto.fix_on` / `auto.escalate_on`, or the profi
 ## `approve_task` says "approval recorded as a request"
 
 `approvals.require_operator` is on. A human must run `sudo workhorse approve <task_id>` on the host
-(it reads the operator token file). `operator token rejected` means the file does not match
-`approvals.operator_token_sha256`: re-run `sudo workhorse operator-token init --force --enable` and restart.
+(it reads the operator token file, prints the pending request and confirms its id). `operator token
+rejected` means the file does not match `approvals.operator_token_sha256`: re-run `sudo workhorse
+operator-token init --force --enable` and restart. `the pending approval request changed` means the
+supervisor recorded a new request after the CLI displayed it: run the command again and review it.
+
+## `continue_task` says "this task waits for the operator"
+
+The task parked for approval while `approvals.require_operator` was on, and the operator has not
+answered yet. Closing or cancelling the task does not remove that gate. The operator resumes it with
+`sudo workhorse approve <task_id>` (or `reject <task_id> --instructions ...`).
 
 ## RTK is enabled but commands are not rewritten
 
 `workhorse token-savers` shows whether the binary was found. RTK applies to Kilo and OpenCode only,
 needs an absolute `rtk.bin` or `rtk` on the daemon's `env_path`, and leaves commands alone when it has
-no equivalent (exit 1) or when the command spans several lines. Tests run by the daemon never use it.
+no equivalent (exit 1), when the command spans several lines, when `rtk rewrite` takes longer than
+1 s, or when the rewritten command would be blocked by the guard (the original runs instead). Tests run
+by the daemon never use it.
 
 ## Verdict `blocked` or many blocked calls
 

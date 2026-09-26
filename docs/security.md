@@ -60,9 +60,12 @@
     binary other than the bundled `stub-cli.mjs`. The installer, systemd unit and supervisor never set
     the flag, and `workhorse health` warns if a running daemon has it.
 12. **Token savers stay outside the trust boundary.** `terse` / `minimal_code` are only extra text in
-    the worker's message. The optional RTK integration runs a local binary (read-only bind) that
-    rewrites the worker's own shell commands inside the sandbox; the guard checks the command before
-    and after rewriting, and the daemon's test run never goes through it. No proxy sees prompts or
+    the worker's message. The optional RTK integration runs a local binary (only that file is bound
+    read-only) that rewrites the worker's own shell commands. The `rtk rewrite` call runs in the
+    worker's outer sandbox, which has network access, but with a minimal environment (`PATH`, `HOME`,
+    `RTK_TELEMETRY_DISABLED=1`, no provider keys) and a 1 s timeout. The guard checks the command
+    before rewriting and checks the rewrite again; a rewrite that fails the check is dropped and the
+    original command runs. The daemon's test run never goes through it. No proxy sees prompts or
     keys (Headroom-style proxies are deliberately not integrated; see [token-savings.md](token-savings.md)).
 
 ## Known limitations
@@ -84,8 +87,13 @@
 - `approve_task` is a coordination signal, not a permission grant. It never widens the sandbox or
   the guard. The approver name (`by`) is recorded as given, and any client holding the daemon socket
   and token (the supervisor included) can approve. The recorded `source.channel` (`mcp` / `cli`) is
-  self-declared by the client for the same reason; `source.auth` says what was verified. See
-  `approvals.require_operator` below for putting a human in the loop.
+  self-declared by the client for the same reason; `source.auth` says what was verified
+  (`daemon_token`, or `operator_token` for a decision made with the operator token).
+- `approvals.require_operator` gates the parked-task flow only: a parked task (and the same task after
+  it is closed or cancelled) cannot be resumed without the operator token, and the operator confirms a
+  specific approval request by id. It is **not a capability boundary**: the supervisor can still
+  delegate a new task that asks for the same thing (visible in the task list and audit log, not
+  blocked). See [handoff.md](handoff.md#operator-confirmation-approvalsrequire_operator-v03).
 
 ## Recommendations
 

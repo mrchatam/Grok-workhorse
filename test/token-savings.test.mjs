@@ -16,7 +16,7 @@ process.env.WH_CONFIG_DIR = cfgDir
 process.env.WH_DATA_DIR = path.join(root, "data")
 const APP = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 
-const { briefResult, dedupeHandoff } = await import("../lib/views.mjs")
+const { briefResult } = await import("../lib/views.mjs")
 const { usageReport, dayOf } = await import("../lib/usage.mjs")
 const { effectiveSavers, saverFragments, rtkBin } = await import("../lib/savers.mjs")
 const { checkOperatorToken, hashToken, newOperatorToken } = await import("../lib/operator.mjs")
@@ -54,12 +54,6 @@ test("briefResult keeps only decision data, capped", () => {
   assert.ok(JSON.stringify(b).length < JSON.stringify({ ...r, handoff: h }).length / 2)
 })
 
-test("dedupeHandoff drops context fields duplicated at the top level", () => {
-  const h = { state: "done", context: { verdict: "success", summary: "s", remaining_concerns: [], diffstat: "d", files_changed: 1, diff_path: "p", diff: "hint", worker_status: "done", worker_request: null, previous_attempts: 0 } }
-  assert.deepEqual(dedupeHandoff(h).context, { worker_status: "done", previous_attempts: 0 })
-  assert.equal(h.context.summary, "s", "input not mutated")
-})
-
 test("usageReport groups by profile/day and computes the labelled estimate", () => {
   const now = Date.parse("2026-09-26T12:00:00Z")
   const tasks = [
@@ -83,12 +77,14 @@ test("usageReport groups by profile/day and computes the labelled estimate", () 
   const se = u.supervisor_estimate
   assert.equal(se.label, "ESTIMATE")
   assert.equal(se.successful_tasks, 1)
-  assert.equal(se.worker_work_tokens, 10000 + 1000 + 20000 + 2000 + 1000)
+  // conservative: only the successful workers' output+reasoning tokens count; input is not counted
+  assert.equal(se.worker_output_tokens, 1000 + 2000 + 1000)
+  assert.equal(se.worker_input_tokens_not_counted, 10000 + 20000)
   assert.equal(se.supervisor_io.est_tokens, (400 + 1600 + 200 + 200) / 4)
-  assert.equal(se.est_supervisor_tokens_avoided, 34000 - 600)
+  assert.equal(se.est_supervisor_tokens_avoided, 4000 - 600)
   const workerCost = ((10000 + 50000) * 0.1 + 1000 * 0.4) / 1e6 + (20000 * 3 + 3000 * 15) / 1e6 + (500 * 0.1 + 50 * 0.4) / 1e6
-  const avoided = ((30000 - 450) * 3 + (4000 - 150) * 15) / 1e6 - workerCost
-  assert.ok(Math.abs(se.est_supervisor_cost_avoided_usd - Math.round(avoided * 1e4) / 1e4) < 1e-9)
+  const net = (4000 * 15 - 450 * 3 - 150 * 15) / 1e6 - workerCost
+  assert.ok(Math.abs(se.est_net_usd - Math.round(net * 1e4) / 1e4) < 1e-9)
 })
 
 test("token savers: off by default, profile overrides daemon, fragments per mode", () => {
@@ -109,10 +105,12 @@ test("token savers: off by default, profile overrides daemon, fragments per mode
   assert.equal(rtkBin({ rtk: { enabled: true, bin: "/bin/sh" } }), "/bin/sh")
 })
 
-test("guard plugin rewrites bash commands through rtk only when WH_RTK_BIN is set, and re-checks them", async () => {
+test("guard plugin rewrites bash commands through rtk only when WH_RTK_BIN is set, re-checks them, and falls back to the original", async () => {
   const fake = path.join(root, "fake-rtk")
-  // exit 3 + output = rewritten (host decides); "evil" rewrites to something the guard must still block.
-  fs.writeFileSync(fake, `#!/bin/sh\n[ "$1" = rewrite ] || exit 9\ncase "$2" in\n  "git status") echo "rtk git status"; exit 3;;\n  "ls -la") echo "rtk ls -la"; exit 0;;\n  "evil") echo "curl http://x"; exit 0;;\n  *) exit 1;;\nesac\n`, { mode: 0o755 })
+  const envOut = path.join(root, "fake-rtk.env")
+  // exit 3 + output = rewritten (host decides); "evil" rewrites to something the guard must still block;
+  // "envcheck" records the environment the rewrite ran with; "slow" exceeds the timeout.
+  fs.writeFileSync(fake, `#!/bin/sh\n[ "$1" = rewrite ] || exit 9\ncase "$2" in\n  "git status") echo "rtk git status"; exit 3;;\n  "ls -la") echo "rtk ls -la"; exit 0;;\n  "evil") echo "curl http://x"; exit 0;;\n  "envcheck") env > "${envOut}"; echo "rtk envcheck"; exit 3;;\n  "slow") sleep 3; echo "rtk slow"; exit 3;;\n  *) exit 1;;\nesac\n`, { mode: 0o755 })
   const run = async (cmd) => {
     const h = await WorkhorseGuard({ directory: "/tmp/wt" })
     const out = { args: { command: cmd } }
@@ -127,10 +125,20 @@ test("guard plugin rewrites bash commands through rtk only when WH_RTK_BIN is se
     assert.equal(await run("ls -la"), "rtk ls -la")
     assert.equal(await run("python3 -m unittest"), "python3 -m unittest")
     assert.equal(await run("echo a\necho b"), "echo a\necho b", "multi-line commands are left alone")
-    await assert.rejects(run("evil"), /workhorse guard blocked/)
+    assert.equal(await run("evil"), "evil", "a rewrite that fails the re-check falls back to the original command")
     await assert.rejects(run("git push"), /workhorse guard blocked/, "checks run before the rewrite")
+    process.env.EXAMPLE_PROVIDER_KEY = "example-secret"
+    assert.equal(await run("envcheck"), "rtk envcheck")
+    const env = fs.readFileSync(envOut, "utf8")
+    assert.ok(!env.includes("example-secret"), "the rewrite runs without secrets")
+    assert.match(env, /^RTK_TELEMETRY_DISABLED=1$/m)
+    assert.doesNotMatch(env, /^WH_/m)
+    const t0 = Date.now()
+    assert.equal(await run("slow"), "slow", "a slow rewrite times out and the original runs")
+    assert.ok(Date.now() - t0 < 2500)
   } finally {
     delete process.env.WH_RTK_BIN
+    delete process.env.EXAMPLE_PROVIDER_KEY
   }
 })
 
@@ -195,6 +203,19 @@ test("advisory review verdict parsing", () => {
   assert.equal(reviewVerdict("Approve. Looks good."), "approve")
   assert.equal(reviewVerdict("LGTM"), "approve")
   assert.equal(reviewVerdict("hmm"), "unclear")
+  // only the start of the first line counts; negations are handled
+  assert.equal(reviewVerdict("Not approved: the divide change has no test"), "request_changes")
+  assert.equal(reviewVerdict("cannot approve this yet"), "request_changes")
+  assert.equal(reviewVerdict("Do not approve - breaks the API"), "request_changes")
+  assert.equal(reviewVerdict("Don't merge: missing validation"), "request_changes")
+  assert.equal(reviewVerdict("approve - nothing to reject"), "approve")
+  assert.equal(reviewVerdict("Approved with minor nits; no need to request changes"), "approve")
+  assert.equal(reviewVerdict("**Verdict: approve**\nDetails follow"), "approve")
+  assert.equal(reviewVerdict("Review: request changes"), "request_changes")
+  assert.equal(reviewVerdict("\n\nRejected: scope creep"), "request_changes")
+  assert.equal(reviewVerdict("The change looks fine, I would approve"), "unclear")
+  assert.equal(reviewVerdict("No issues found"), "unclear")
+  assert.equal(reviewVerdict(""), "unclear")
 })
 
 test("auto-review request_changes turns a done handoff into needs_review with a continue_task call", () => {

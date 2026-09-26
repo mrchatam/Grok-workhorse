@@ -8,7 +8,7 @@ backward compatible, and everything that changes worker behaviour is **opt-in**.
 | Where tokens go | Feature | Default |
 |---|---|---|
 | Supervisor: polling round trips | `wait_task` long-poll (single or many ids, `any`/`all`, up to 55 s per call) | available; the skill prefers it |
-| Supervisor: reading results | compact JSON from the MCP shim, `view: "brief"` (~0.5-1 KB), deduplicated handoff in the full view | compact: on; brief: opt-in per call (the skill uses it), `wait_task` returns brief |
+| Supervisor: reading results | compact JSON from the MCP shim, `view: "brief"` (~0.5-1 KB) | compact: on; brief: opt-in per call (the skill uses it), `wait_task` returns brief |
 | Supervisor: fix/escalate/review turns | `auto_fix_rounds`, `escalate` (cheap -> mid -> strong via `escalate_to`), `auto_review` on a cheap profile | off |
 | Supervisor: choosing and batching | presets, size routing, `delegate_tasks` (up to 10 per call) | available |
 | Worker output | `token_savers.terse` (short prose), `token_savers.minimal_code` (smallest-diff bias) | off |
@@ -23,8 +23,9 @@ backward compatible, and everything that changes worker behaviour is **opt-in**.
 (finished or parked for approval) or `max_wait_s` passes (default 45, capped at **55 s**), then returns
 `{done, waited_s, task}` with the brief result. If `done` is false, call it again. The cap keeps each
 MCP call under the 60 s request timeout that many MCP clients use by default (the TypeScript SDK's
-`DEFAULT_REQUEST_TIMEOUT_MSEC` is 60000), with margin for the round trip. A waiting call holds no
-daemon resources except a timer.
+`DEFAULT_REQUEST_TIMEOUT_MSEC` is 60000), with margin for the round trip. While it waits, a call
+holds one open socket connection to the daemon and a light in-process check every 500 ms (no worker
+or model tokens); the loop stops as soon as the client disconnects or the daemon shuts down.
 
 ### Compact JSON and the brief view
 
@@ -32,23 +33,36 @@ The MCP shim now returns compact JSON (no indentation; 9-18% fewer characters on
 takes `view: "full"` (default, unchanged fields) or `view: "brief"`: verdict, a 300-char summary, up to
 20 changed files, test outcome (failing test names only on failure), up to 5 concerns, `next` (handoff
 state, owner, action and the suggested tool call), the advisory review, the automatic trail and token
-totals. In the full view the handoff's `context` no longer repeats fields that are already top-level.
-`get_handoff` (RPC) and `workhorse handoff <id>` still show the complete record.
+totals. The full view keeps every field it had in v0.2, including the complete handoff (its
+`context` repeats some top-level fields; they are kept for compatibility). `get_handoff` (RPC) and
+`workhorse handoff <id>` show the complete record too.
 
 ### Automatic follow-ups on cheap models
 
 Instead of the supervisor reading a failed result, writing a fix request and waiting again, the daemon
 can do it (see [configuration.md](configuration.md#presets-size-routing-and-automatic-follow-ups-v03)):
 
-- `auto_fix_rounds` 1..3: fix rounds in the same session after failing tests or a missing/partial
-  RESULT block;
+- `auto_fix_rounds` 1..3: fix rounds **per profile** in the same session after failing tests or a
+  missing/partial RESULT block (after an escalation the next profile gets its own rounds);
 - `escalate: true`: when that is not enough, the next profile of the `escalate_to` chain (fresh
   session, same worktree);
 - `auto_review`: a read-only review on a cheap profile; its verdict is advisory.
 
-Hard caps: at most 3 fix rounds, `auto.max_auto_runs` (default 3, never more than 6) automatic runs
-per task, optional `auto.max_tokens` and `auto.max_cost_usd`. The result's `auto.trail` shows every
-step, for example `["cheap:tests_failed->fix", "cheap:tests_failed->mid", "mid:success"]`.
+Hard caps: at most 3 fix rounds per profile, and **in total** at most `auto.max_auto_runs` automatic
+runs per task (default 3, never more than 6), whatever mix of fix rounds and escalations that is;
+optional `auto.max_tokens` and `auto.max_cost_usd` budgets. The result's `auto.trail` shows every
+step, for example `["cheap:tests_failed->auto_fix", "cheap:tests_failed->escalate", "mid:success"]`.
+
+Budget details:
+
+- The budgets count every run of the task (including the first) plus the tokens and estimated cost of
+  its automatic review tasks.
+- They are checked between runs, so a single run can overshoot them; the next automatic run is then
+  not started.
+- `0` means an explicit zero budget (no automatic follow-ups at all), not "unlimited". Leave the key
+  out (or `null`) for no budget.
+- `continue_task` starts a new automatic round: the trail and the fix-round / `max_auto_runs`
+  counters restart, but the token and cost budgets keep counting the whole task.
 
 ### Presets, size routing, batches
 
@@ -89,8 +103,13 @@ workhorse token-savers off
   concerns. Not applied to review tasks.
 - **`rtk`**: Kilo and OpenCode only. The guard plugin asks `rtk rewrite <command>` for a compact
   equivalent of each bash command the worker runs (`git status` -> `rtk git status`) and uses it only
-  if the rewritten command passes the same guard checks. Multi-line commands are left alone. The rtk
-  binary's directory is bound read-only into the sandbox. Claude Code and Codex runs ignore it.
+  if the rewritten command passes the same guard checks; if it does not (or `rtk rewrite` fails or
+  takes longer than 1 s), the original command runs unchanged. The rewrite call gets a minimal
+  environment (`PATH`, `HOME`, `RTK_TELEMETRY_DISABLED=1`; no provider keys). It runs synchronously
+  in the plugin hook (the hook must return the final command), inside the worker's outer sandbox,
+  which has network access; the model-run command itself runs in Kilo's inner sandbox. Multi-line
+  commands are left alone. Only the rtk binary itself (resolved path) is bound read-only into the
+  sandbox, not its directory. Claude Code and Codex runs ignore it.
 
 Fragments go only into the first message of a fresh session (not into follow-ups, which already have
 them in context). **The daemon's own test run is never routed through RTK or any other compression**:
@@ -127,8 +146,10 @@ Risks we designed around:
 - **Quality loss.** Prompt savers can make a model skip context or cut corners. That is why they are
   off by default, the RESULT format is protected, and `minimal_code` has never-drop rules. The daemon's
   verdict still comes from the tests.
-- **Secrets.** No saver sends data anywhere. RTK runs inside the worker sandbox (no network for
-  model-run commands on Kilo) with telemetry off by default.
+- **Secrets.** No saver sends data anywhere. The `rtk rewrite` call runs with a minimal environment
+  (no API keys) and `RTK_TELEMETRY_DISABLED=1`. It runs in the worker's outer sandbox, which does have
+  network access; the rewritten command then runs like any model-run command (on Kilo: inner
+  sandbox, no network).
 
 ## Benchmarks
 
@@ -139,8 +160,8 @@ treat them as **estimates**.
 ### Supervisor side (stub backend, v0.2 flow vs v0.3 flow)
 
 Measured with the test-only stub backend on the calc fixture. "v0.2" = `delegate_task`, `task_status`
-polls, `task_result` (full view, pretty JSON, handoff with duplicated context). "v0.3" =
-`delegate_task` + one `wait_task` (brief, compact JSON).
+polls, `task_result` (full view, pretty JSON). "v0.3" = `delegate_task` + one `wait_task` (brief,
+compact JSON). The v0.3 full view has the same fields as v0.2, only compact JSON.
 
 | Response the supervisor reads | chars | tokens (o200k) |
 |---|---|---|
@@ -148,7 +169,6 @@ polls, `task_result` (full view, pretty JSON, handoff with duplicated context). 
 | v0.2 `task_status` while running / final | 634 / 935 | 224 / 314 |
 | v0.2 `task_result` full, success | 4,318 | 1,427 |
 | v0.2 `task_result` full, tests_failed | 7,150 | 2,182 |
-| v0.3 `task_result` full (compact, deduped), success | 3,179 | 976 |
 | v0.3 `delegate_task` (compact) | 510 | 162 |
 | v0.3 `wait_task` with brief result, success | 671 | 198 |
 
@@ -216,22 +236,29 @@ indicative only, and measure on your own repos with `workhorse stats` before ena
 tokens and estimated list cost by profile and by day (per run, so escalated tasks are split across
 profiles). Tasks from before v0.3 count their totals on their last run.
 
-The report also contains `supervisor_estimate`, **labelled ESTIMATE**. Formula, per task whose final
-verdict is `success` or `success_untested`:
+The report also contains `supervisor_estimate`, **labelled ESTIMATE**. It is deliberately
+conservative:
 
 ```
-worker_work_tokens        = worker input + output + reasoning tokens   (cache reads excluded)
-supervisor_overhead       = (chars the supervisor sent for this task + chars it received) / chars_per_token
-est_supervisor_tokens_avoided = max(0, sum(worker_work_tokens) - sum(supervisor_overhead of all tasks))
+worker_output_tokens  = output + reasoning tokens of tasks whose final verdict is success or success_untested
+supervisor_overhead   = (chars the supervisor sent to workhorse + chars it read back, all tasks) / chars_per_token
+est_supervisor_tokens_avoided = max(0, worker_output_tokens - supervisor_overhead)
 ```
 
-Failed tasks count only as overhead. Supervisor characters are recorded by the daemon for every MCP
-call made through `workhorse-mcp` (the operator CLI is excluded). `chars_per_token` defaults to 4
-(`daemon.json supervisor.chars_per_token`). With `supervisor.price_per_mtok: {input, output}` it also
-gives a USD figure: avoided input tokens x input price + avoided output tokens x output price - the
-workers' estimated list cost.
+Worker **input** tokens are not counted at all (`worker_input_tokens_not_counted` shows them): most of
+them are the same context re-read on every turn, and a supervisor doing the work itself would read a
+different amount. Failed tasks count only as overhead. Supervisor characters are recorded by the
+daemon for every MCP call made through `workhorse-mcp` (the operator CLI is excluded).
+`chars_per_token` defaults to 4 (`daemon.json supervisor.chars_per_token`). With
+`supervisor.price_per_mtok: {input, output}` it also gives
 
-The assumption behind it: the supervisor would have needed about as many tokens as the worker to do
-the same work itself. A stronger model may need fewer turns (the estimate is then too high); doing
-the work itself would also grow the supervisor's context for the rest of the session (not counted, so
-too low). It is a planning aid, not a measurement.
+```
+est_net_usd = worker_output_tokens x price.output
+            - supervisor tokens read x price.input - supervisor tokens written x price.output
+            - the workers' estimated list cost          (can be negative)
+```
+
+The assumption behind it: for work that succeeded, the supervisor would have had to generate about
+as many output tokens as the workers did. A stronger model may write less (too high); the input it
+would have read and the growth of its own context are ignored (too low). With small tasks the result
+is often 0. It is a planning aid, not a measurement.

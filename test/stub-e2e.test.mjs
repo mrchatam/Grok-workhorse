@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
-import { setupStubEnv, stest, startDaemon, sleep, REPO_NAME, STUB_TEST_CMD, stubMessages, editJson, STUB_SKIP } from "./helpers.mjs"
+import { setupStubEnv, stest, startDaemon, stopDaemon, sleep, REPO_NAME, STUB_TEST_CMD, stubMessages, editJson, STUB_SKIP } from "./helpers.mjs"
 
 const env = await setupStubEnv("e2e")
 let rpc
@@ -20,8 +20,7 @@ before(async () => {
   daemon = await startDaemon(env, DAEMON_ENV)
 })
 after(async () => {
-  if (daemon) try { process.kill(-daemon.pid, "SIGTERM") } catch {}
-  await sleep(300)
+  await stopDaemon(daemon)
 })
 
 const task = (scenario, extra = "") => `MOCK_SCENARIO=${scenario} Implement multiply and divide in calc/core.py. ${extra}`
@@ -50,7 +49,7 @@ stest("happy path: wait_task long-poll returns a compact brief result", async ()
   assert.ok(JSON.stringify(r).length < 1500, `brief result is ${JSON.stringify(r).length} chars`)
   const full = await rpc("task_result", { task_id: d.task_id })
   assert.equal(full.verdict, "success")
-  assert.equal(full.handoff.context.summary, undefined, "handoff context no longer repeats top-level fields")
+  assert.equal(full.handoff.context.summary, full.summary, "the full view keeps the complete handoff (compatibility)")
   assert.ok(JSON.stringify(full).length > JSON.stringify(r).length * 2)
   const brief = await rpc("task_result", { task_id: d.task_id, view: "brief" })
   assert.deepEqual(brief, r)
@@ -206,7 +205,11 @@ stest("auto_review: a cheap advisory review is attached to the result", async ()
   const child = await rpc("task_result", { task_id: r.review.task_id })
   assert.equal(child.mode, "review")
   const list = await rpc("list_tasks", { limit: 200 })
-  assert.ok(list.tasks.some((t) => t.task_id === r.review.task_id))
+  assert.ok(!list.tasks.some((t) => t.task_id === r.review.task_id), "review children are hidden by default")
+  const all = await rpc("list_tasks", { limit: 200, include_auto_reviews: true })
+  assert.equal(all.tasks.find((t) => t.task_id === r.review.task_id)?.auto_review_of, d.task_id)
+  const attention = await rpc("list_tasks", { limit: 200, status: "needs_attention", include_auto_reviews: true })
+  assert.ok(!attention.tasks.some((t) => t.task_id === r.review.task_id), "a review child never needs attention itself")
 })
 
 stest("require_operator: the supervisor's approve only records a request; the operator token confirms", async () => {
@@ -217,6 +220,7 @@ stest("require_operator: the supervisor's approve only records a request; the op
     await waitDone(d.task_id)
     const req = await rpc("approve_task", { task_id: d.task_id, decision: "approve", instructions: "ok from supervisor" })
     assert.equal(req.approval_requested, true)
+    assert.match(req.request_id, /^[0-9a-f]{12}$/)
     assert.equal((await rpc("task_status", { task_id: d.task_id })).status, "needs_approval")
     await assert.rejects(rpc("continue_task", { task_id: d.task_id, instructions: "do it anyway" }), /require_operator/)
     await assert.rejects(rpc("update_handoff", { task_id: d.task_id, state: "done" }), /only the operator/)
@@ -224,13 +228,74 @@ stest("require_operator: the supervisor's approve only records a request; the op
     const brief = await rpc("task_result", { task_id: d.task_id, view: "brief" })
     assert.equal(brief.approval_request.waiting_for, "operator")
     assert.match(brief.next.action, /sudo workhorse approve/)
-    const ok = await rpc("approve_task", { task_id: d.task_id, decision: "approve", operator_token: tok }, { caller: { client: "workhorse" } })
+    const op = { caller: { client: "workhorse" } }
+    const shown = await rpc("get_handoff", { task_id: d.task_id }, op)
+    assert.equal(shown.approval_request.id, req.request_id)
+    assert.equal(shown.approval_request.instructions, "ok from supervisor")
+    assert.ok(shown.operator_gate)
+    await assert.rejects(rpc("approve_task", { task_id: d.task_id, decision: "approve", operator_token: tok }, op), /is pending: review it first/)
+    // The supervisor changes its request after the operator looked: the displayed id no longer matches.
+    const req2 = await rpc("approve_task", { task_id: d.task_id, decision: "approve", instructions: "and also delete the tests" })
+    assert.notEqual(req2.request_id, req.request_id)
+    await assert.rejects(rpc("approve_task", { task_id: d.task_id, decision: "approve", operator_token: tok, request_id: req.request_id }, op), /request changed/)
+    await rpc("approve_task", { task_id: d.task_id, decision: "approve", instructions: "ok from supervisor" })
+    const current = (await rpc("get_handoff", { task_id: d.task_id }, op)).approval_request
+    const ok = await rpc("approve_task", { task_id: d.task_id, decision: "approve", operator_token: tok, request_id: current.id }, op)
     assert.match(ok.approval.by, /^operator \(requested by supervisor\)/)
+    assert.deepEqual(ok.approval.source, { channel: "cli", auth: "operator_token" })
+    assert.equal(ok.approval.request_id, current.id)
     const r = await waitDone(d.task_id)
     assert.equal(r.verdict, "success")
     assert.match(stubMessages(env, d.task_id)[1].message, /ok from supervisor/, "the recorded instructions are used")
     const audit = fs.readFileSync(path.join(env.dataDir, "logs/audit.jsonl"), "utf8")
     assert.ok(!audit.includes(tok), "the operator token never reaches the audit log")
+  } finally {
+    editJson(cfgFile("daemon.json"), (j) => { delete j.approvals })
+  }
+})
+
+stest("require_operator: closing, cancelling or rejecting with instructions cannot bypass the operator", async () => {
+  const tok = crypto.randomBytes(32).toString("hex")
+  editJson(cfgFile("daemon.json"), (j) => { j.approvals = { require_operator: true, operator_token_sha256: crypto.createHash("sha256").update(tok).digest("hex") } })
+  const op = { caller: { client: "workhorse" } }
+  const parked = async () => {
+    const d = await delegate({ task: task("approval") })
+    assert.equal((await waitDone(d.task_id)).status, "needs_approval")
+    return d.task_id
+  }
+  try {
+    // (a) update_handoff state=closed on the parked task, then continue_task
+    const a = await parked()
+    const closed = await rpc("update_handoff", { task_id: a, state: "closed", note: "closing it" })
+    assert.equal(closed.status, "cancelled")
+    await assert.rejects(rpc("continue_task", { task_id: a, instructions: "do the approved thing" }), /waits for the operator/)
+    assert.ok((await rpc("get_handoff", { task_id: a })).operator_gate, "the gate survives closing")
+    // (b) cancel_task on the parked task, then continue_task
+    const b = await parked()
+    assert.equal((await rpc("cancel_task", { task_id: b })).status, "cancelled")
+    await assert.rejects(rpc("continue_task", { task_id: b, instructions: "do the approved thing" }), /waits for the operator/)
+    await assert.rejects(rpc("continue_task", { task_id: b, instructions: "x", operator_token: "0".repeat(64) }), /operator token rejected|unknown parameter/)
+    // (c) approve_task reject WITH instructions resumes the worker, so it needs the operator
+    const c = await parked()
+    await assert.rejects(rpc("approve_task", { task_id: c, decision: "reject", instructions: "instead, do this other thing" }), /only the operator/)
+    assert.equal((await rpc("task_status", { task_id: c })).status, "needs_approval")
+    // reject without instructions only closes it, and it stays gated
+    assert.equal((await rpc("approve_task", { task_id: c, decision: "reject" })).status, "cancelled")
+    await assert.rejects(rpc("continue_task", { task_id: c, instructions: "x" }), /waits for the operator/)
+    for (const id of [a, b, c]) assert.equal(stubMessages(env, id).length, 1, `task ${id}: the worker was never resumed`)
+    // The operator can still resume a closed gated task; that clears the gate.
+    const r = await rpc("approve_task", { task_id: a, decision: "approve", operator_token: tok, instructions: "operator says go" }, op)
+    assert.ok(["queued", "running"].includes(r.status))
+    assert.equal((await waitDone(a)).verdict, "success")
+    assert.match(stubMessages(env, a)[1].message, /APPROVED by operator[\s\S]*operator says go/)
+    assert.equal((await rpc("get_handoff", { task_id: a })).operator_gate, undefined)
+    // The operator's reject with instructions is allowed.
+    const rr = await rpc("approve_task", { task_id: b, decision: "reject", operator_token: tok, instructions: "do not do it; just summarise" }, op)
+    assert.ok(["queued", "running"].includes(rr.status))
+    await waitDone(b)
+    assert.match(stubMessages(env, b)[1].message, /DENIED by operator/)
+    const audit = fs.readFileSync(path.join(env.dataDir, "logs/audit.jsonl"), "utf8")
+    assert.ok(!audit.includes(tok))
   } finally {
     editJson(cfgFile("daemon.json"), (j) => { delete j.approvals })
   }
@@ -270,8 +335,10 @@ stest("usage_report: tokens by profile/day and a labelled supervisor ESTIMATE", 
   const se = u.supervisor_estimate
   assert.equal(se.label, "ESTIMATE")
   assert.ok(se.supervisor_io.calls > 10)
-  assert.ok(se.worker_work_tokens > 0)
-  assert.ok(se.est_supervisor_tokens_avoided > 0)
+  assert.ok(se.worker_output_tokens > 0)
+  // Conservative: only successful workers' output tokens count, minus everything the supervisor read and
+  // wrote; with the tiny stub outputs that is usually 0, never negative.
+  assert.equal(se.est_supervisor_tokens_avoided, Math.max(0, Math.round(se.worker_output_tokens - se.supervisor_io.est_tokens)))
   assert.match(se.formula, /chars_per_token/)
   const one = await rpc("usage_report", { profile: "strong", days: 1 })
   assert.deepEqual(one.by_profile.map((p) => p.profile).sort(), ["mid", "strong"].filter((x) => one.by_profile.some((p) => p.profile === x)).sort())
@@ -280,8 +347,7 @@ stest("usage_report: tokens by profile/day and a labelled supervisor ESTIMATE", 
 stest("restart: a killed daemon leaves an interrupted, retryable task that resumes", async () => {
   const d = await delegate({ task: task("slow") })
   for (let i = 0; i < 50 && (await rpc("task_status", { task_id: d.task_id })).status !== "running"; i++) await sleep(100)
-  process.kill(-daemon.pid, "SIGKILL")
-  await sleep(300)
+  await stopDaemon(daemon, "SIGKILL")
   daemon = await startDaemon(env, DAEMON_ENV)
   const r = await waitDone(d.task_id)
   assert.equal(r.verdict, "interrupted")
@@ -295,8 +361,7 @@ stest("restart: a killed daemon leaves an interrupted, retryable task that resum
 stest("restart: a graceful stop (SIGTERM) also leaves a finalized, retryable task", async () => {
   const d = await delegate({ task: task("slow") })
   for (let i = 0; i < 50 && (await rpc("task_status", { task_id: d.task_id })).status !== "running"; i++) await sleep(100)
-  process.kill(-daemon.pid, "SIGTERM")
-  for (let i = 0; i < 100 && fs.existsSync(path.join(env.dataDir, "run/daemon.sock")); i++) await sleep(100)
+  await stopDaemon(daemon, "SIGTERM")
   daemon = await startDaemon(env, DAEMON_ENV)
   const r = await waitDone(d.task_id)
   assert.equal(r.verdict, "interrupted")

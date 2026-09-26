@@ -160,6 +160,7 @@ tool(
     status: z.string().max(20).optional().describe("Filter: a status name, 'active', 'terminal', 'parked' (needs_approval) or 'needs_attention' (parked tasks plus finished tasks whose handoff is not done/closed)"),
     repo: z.string().max(64).optional(),
     owner: z.string().max(80).optional().describe("Filter by handoff owner, e.g. 'human' or 'supervisor'"),
+    include_auto_reviews: z.boolean().optional().describe("Also list the automatic review tasks (auto.review); hidden by default"),
     limit: z.number().int().min(1).max(200).optional().describe("Default 20"),
   },
 )
@@ -190,7 +191,7 @@ tool(
 
 tool(
   "approve_task",
-  "Answer a task that is parked (needs_approval) or blocked. decision=approve resumes it in the same session and worktree with the approval (and optional instructions) sent to the worker. decision=reject with instructions resumes it telling the worker not to do it; without instructions it closes the task (status cancelled, worktree kept). Approval does not lift sandbox rules.",
+  "Answer a task that is parked (needs_approval) or blocked. decision=approve resumes it in the same session and worktree with the approval (and optional instructions) sent to the worker. decision=reject with instructions resumes it telling the worker not to do it; without instructions it closes the task (status cancelled, worktree kept). Approval does not lift sandbox rules. If the owner turned on approvals.require_operator, approve only records a request (a human confirms it on the host), reject with instructions is refused, and a closed task stays gated: continue_task on it is refused too.",
   {
     task_id: taskId,
     decision: z.enum(["approve", "reject"]),

@@ -15,7 +15,7 @@ asked to write it. When the worker reports `status: blocked`, `needs_approval` o
 
 | Where | What |
 |---|---|
-| `task_result` (full view, default) | the record under `handoff`; since v0.3 its `context` no longer repeats fields that are already top-level in the same response (verdict, status, summary, remaining_concerns, diffstat, files_changed, diff_path, diff) |
+| `task_result` (full view, default) | the complete record under `handoff` (unchanged in v0.3; its `context` repeats a few top-level fields, kept for compatibility) |
 | `task_result` with `view: "brief"`, `wait_task` | `next`: state, owner, action (first 500 chars) and the suggested `tool` + `args` |
 | `get_handoff` (RPC) / `workhorse handoff <id>` | the complete record, including the full `context` |
 | `task_status` | `handoff`: state, owner, next_action (first 300 chars), names of failed checks, updated_at/by |
@@ -149,21 +149,47 @@ human does it outside the sandbox first and then approves. The `next_action` tex
 
 ## Operator confirmation (`approvals.require_operator`, v0.3)
 
-By default the supervisor's `approve_task` is final. An owner who wants a human in the loop for every
-approval sets `daemon.json` `approvals.require_operator: true` (easiest: `sudo workhorse operator-token
-init --enable`, which writes a random token to a root-only file and stores only its SHA-256 in
-daemon.json). Then:
+By default the supervisor's `approve_task` is final. An owner who wants a human to confirm approvals
+sets `daemon.json` `approvals.require_operator: true` (easiest: `sudo workhorse operator-token init
+--enable`, which writes a random token to a root-only file and stores only its SHA-256 in daemon.json).
 
-1. MCP `approve_task` (from the supervisor) does not resume anything. It records an
-   **approval request** (`decision`, `instructions`, `by`, time) on the task, returns
-   `approval_requested: true` (handoff owner `human (operator)`), and the brief/full result shows
-   `approval_request`. Rejections do not need the operator: they only stop or redirect work.
-2. A human runs `sudo workhorse approve <id>` (or `reject`). The CLI reads the token file and sends
-   the token; the daemon checks it against the hash (constant-time) and applies the recorded request's
-   instructions unless the CLI passes its own.
-3. `continue_task` and `update_handoff` cannot unpark a parked task without the token either, so the
-   supervisor cannot route around the gate. The token is never an MCP parameter, is masked in the
-   audit log, and never appears in results.
+**What it covers, and what it does not.** The option gates the *parked-task flow*: a task that parked
+for approval cannot be resumed until the operator answers with the operator token. It is **not a
+capability boundary**. The supervisor can still delegate a new task that asks the worker for the same
+thing (that is visible in `workhorse tasks` and the audit log, but nothing blocks it), and approval
+never widens the sandbox in any case. Use it to keep a human in the loop for decisions the worker
+flagged, not as a way to stop a supervisor that is determined to do something.
+
+How it works:
+
+1. When a task parks (the worker asked for approval or input, or someone set a parking state with
+   `update_handoff`) the daemon sets a persistent **operator gate** on it (`operator_gate` in
+   `get_handoff`). The gate stays until the operator answers with the token, whatever happens to the
+   task's status meanwhile: closing it (`update_handoff state=closed`, `cancel_task`,
+   `approve_task decision=reject` without instructions) keeps the gate, so a later `continue_task` is
+   refused. Tasks parked before the option was turned on are gated while parked, and get the gate
+   when they are closed.
+2. Without the token, MCP `approve_task decision=approve` does not resume anything. It records an
+   **approval request** with an id (`request_id`, a short hash; the request holds `instructions`,
+   `note`, `profile`, `timeout_minutes`, `by`, `source`, time), returns `approval_requested: true`
+   (handoff owner `human (operator)`), and the brief/full result shows `approval_request`. Recording a
+   new request replaces the old one and gets a new id.
+3. Without the token, `decision=reject` may only **close** the task. Reject *with instructions* would
+   resume the worker with supervisor text, so it is refused. `continue_task` and `update_handoff`
+   (any state that would unpark it) are refused too; `update_handoff state=closed` is allowed and
+   closes the task the same way (status `cancelled`, gate kept).
+4. A human runs `sudo workhorse approve <id>` (or `reject`). The CLI fetches the handoff, prints the
+   worker's request and the pending approval request (id, who, instructions, note), asks for
+   confirmation on a terminal (`--yes` skips the prompt), and sends the operator token plus the
+   **displayed request id**. The daemon checks the token against the hash (constant-time) and refuses
+   the decision if the pending request changed after it was displayed (or if a request is pending and
+   no id was sent), so the operator never approves text it did not see. On approval the recorded
+   request's instructions are used unless the operator passes `--instructions`. The operator can also
+   resume a gated task that was closed meanwhile, and can reject with instructions. The operator's
+   answer clears the gate (audit event `operator_gate_cleared`).
+5. The token is never an MCP parameter (the MCP `approve_task` schema has no token or request id), is
+   masked in the audit log, and never appears in results. Approvals made with it record
+   `source.auth: "operator_token"`; everything else records `daemon_token`.
 
 ## Automatic follow-ups, reviews and handoff (v0.3)
 

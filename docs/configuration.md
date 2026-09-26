@@ -71,20 +71,32 @@ the routine follow-up work on cheap models.
   the call or the preset) > `default_profile`. A preset may set any of `description`, `profile`, `size`,
   `mode`, `timeout_minutes`, `test_command`, `instructions` (appended to the task as standing
   instructions), `auto_fix_rounds`, `escalate`, `auto_review`. Call parameters win over the preset.
-- **`auto_fix_rounds`** (0..3, hard cap 3): when an implement run ends with a verdict in `auto.fix_on`,
-  the daemon sends the same session a fix message with the failing tests/concerns, before settling.
+- **`auto_fix_rounds`** (0..3, hard cap 3, counted **per profile**): when an implement run ends with a
+  verdict in `auto.fix_on`, the daemon sends the same session a fix message with the failing
+  tests/concerns, before settling. After an escalation the next profile gets its own rounds; the total
+  is still limited by `max_auto_runs`.
 - **`escalate`** (bool): when fix rounds are used up (or none were set) and the verdict is in
   `auto.escalate_on`, the task moves to the profile's `escalate_to` (fresh session, same worktree,
   existing changes kept). Chains are followed one step per run, cycles are refused by `workhorse validate`.
-- **Hard caps**: `max_auto_runs` (default 3, cap 6) automatic runs per task, plus optional
-  `max_tokens` (input+output+reasoning of all runs) and `max_cost_usd` (needs `price_per_mtok`). The
-  first cap reached stops the chain; the result records `auto.stopped_reason`.
+- **Hard caps**: `max_auto_runs` (default 3, cap 6) automatic runs per task in total (fix rounds and
+  escalations together), plus optional `max_tokens` (input+output+reasoning of all runs, including the
+  task's automatic review tasks) and `max_cost_usd` (needs `price_per_mtok`; also includes the reviews).
+  The first cap reached stops the chain; the result records `auto.stopped_reason`. Budgets are checked
+  between runs, so one run can overshoot them. `0` is an explicit zero budget (no automatic follow-ups);
+  omit the key or use `null` for no budget; negative or non-numeric values fail `workhorse validate`.
+  `continue_task` restarts the trail and the run counters for its new round, but not the token/cost
+  budgets.
 - **Escalation trail**: every automatic step is in `result.auto.trail` (`profile`, `verdict`, `next`,
-  tokens) and in the brief view as `"cheap:tests_failed->fix"`, `"cheap:tests_failed->mid"`, ...
+  tokens) and in the brief view as `"cheap:tests_failed->auto_fix"`, `"cheap:tests_failed->escalate"`,
+  `"mid:success"`.
 - **`auto_review`** (`true` or a profile name; default profile `auto.review.profile`, else the default
   profile): after a verdict in `auto.review.on`, a read-only review task runs on the diff. Its verdict is
   **advisory**: `result.review` and, for `request_changes`, handoff state `needs_review` with a suggested
   `continue_task`. It never changes the daemon's own verdict and never triggers a fix round by itself.
+  The reviewer's verdict is read from the first line of its answer only (`approve`, `request_changes`,
+  negations such as "not approved" count as request_changes); anything else is `unclear`. Review tasks
+  are hidden from `list_tasks` / `workhorse tasks` unless `include_auto_reviews` /
+  `--include-auto-reviews` is set, and never show up as needing attention themselves.
 
 Examples: [`config/examples/profiles.nvidia.json`](../config/examples/profiles.nvidia.json),
 [`profiles.openrouter.json`](../config/examples/profiles.openrouter.json) and

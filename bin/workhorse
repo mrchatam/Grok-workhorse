@@ -13,8 +13,9 @@ Service:
   status                          quick daemon status (exit 1 if not running)
   health [--json]                 full check for a daily cron/agent run (exit 1 on any FAIL)
   logs [N] | audit [N]            tail daemon.log / audit.jsonl
-  tasks [N] [--status S] [--owner O]
-                                  recent tasks (S: a status, active, terminal, parked, needs_attention)
+  tasks [N] [--status S] [--owner O] [--include-auto-reviews]
+                                  recent tasks (S: a status, active, terminal, parked, needs_attention);
+                                  automatic review tasks are hidden unless --include-auto-reviews
   attention [N]                   tasks that need someone: parked (needs_approval) or handoff not done/closed
   wait <task_id>... [--all] [--max S] [--full]
                                   long-poll until the task(s) finish (brief result; --all waits for every id)
@@ -26,13 +27,15 @@ Service:
 Handoff and approval:
   handoff <task_id> [--state S] [--owner O] [--next "<action>"] [--note "<text>"] [--by NAME]
                                   show the task's handoff record, or update it when options are given
-  approve <task_id> [--instructions "<text>"] [--note "<text>"] [--timeout MIN] [--profile P] [--by NAME]
+  approve <task_id> [--instructions "<text>"] [--note "<text>"] [--timeout MIN] [--profile P] [--by NAME] [--yes]
                                   approve a parked/blocked task and resume it in the same session + worktree
-  reject <task_id> [--instructions "<text>"] [--note "<text>"] [--by NAME]
+  reject <task_id> [--instructions "<text>"] [--note "<text>"] [--by NAME] [--yes]
                                   deny it: close the task, or resume with --instructions (do something else)
   operator-token init [--force] [--enable]
                                   create the operator token (approvals.require_operator); prints only its sha256.
-                                  With require_operator on, \`sudo workhorse approve\` sends the token.
+                                  With require_operator on, \`sudo workhorse approve|reject\` prints the pending
+                                  request, asks for confirmation on a terminal (--yes skips it) and sends the
+                                  token plus the displayed request id (refused if the request changed).
 Config (the config dir is root-owned once locked: use sudo for these):
   repos                           show the allowlist
   add-repo <git-url|path> [--name N] [--test "<cmd>"] [--allow-test "<regex>"]... [--base BRANCH]
@@ -151,9 +154,9 @@ try {
       break
     case "tasks":
     case "attention": {
-      const f = flags(rest, { status: "str", owner: "str" })
+      const f = flags(rest, { status: "str", owner: "str", "include-auto-reviews": "bool" })
       const status = cmd === "attention" ? "needs_attention" : f.status
-      out(await rpc("list_tasks", { limit: Number(f._[0]) || 20, ...(status ? { status } : {}), ...(f.owner ? { owner: f.owner } : {}) }))
+      out(await rpc("list_tasks", { limit: Number(f._[0]) || 20, ...(status ? { status } : {}), ...(f.owner ? { owner: f.owner } : {}), ...(f["include-auto-reviews"] ? { include_auto_reviews: true } : {}) }))
       break
     }
     case "handoff": {
@@ -167,25 +170,50 @@ try {
     }
     case "approve":
     case "reject": {
-      const f = flags(rest, { instructions: "str", note: "str", timeout: "str", profile: "str", by: "str" })
+      const f = flags(rest, { instructions: "str", note: "str", timeout: "str", profile: "str", by: "str", yes: "bool", "request-id": "str" })
       const id = f._[0]
-      if (!id) throw new Error(`usage: workhorse ${cmd} <task_id> [--instructions "<text>"] [--note "<text>"]`)
-      // approvals.require_operator: send the operator token (readable only by the operator, e.g. root).
+      if (!id) throw new Error(`usage: workhorse ${cmd} <task_id> [--instructions "<text>"] [--note "<text>"] [--yes] [--request-id ID]`)
+      const caller = { caller: { client: "workhorse" } }
+      // approvals.require_operator: send the operator token (readable only by the operator, e.g. root),
+      // after showing what is being answered; the displayed approval request id goes back to the daemon,
+      // which refuses the decision if the request changed in the meantime.
       let opTok = null
-      if (cmd === "approve") {
-        const { daemonConfig } = await import("../lib/config.mjs")
-        const { readOperatorToken, requireOperator, operatorTokenPath } = await import("../lib/operator.mjs")
-        const cfg = daemonConfig()
-        if (requireOperator(cfg)) {
-          opTok = readOperatorToken(cfg)
-          if (!opTok) console.error(`note: approvals.require_operator is on but ${operatorTokenPath(cfg)} is not readable; this only records an approval request (use sudo)`)
+      let requestId
+      const { daemonConfig } = await import("../lib/config.mjs")
+      const { readOperatorToken, requireOperator, operatorTokenPath } = await import("../lib/operator.mjs")
+      const cfg = daemonConfig()
+      if (requireOperator(cfg)) {
+        opTok = readOperatorToken(cfg)
+        if (!opTok) {
+          console.error(`note: approvals.require_operator is on but ${operatorTokenPath(cfg)} is not readable (use sudo): ${cmd === "approve" ? "this only records an approval request" : "reject can only close the task"}`)
+        } else {
+          const hf = await rpc("get_handoff", { task_id: id }, caller)
+          const h = hf.handoff || {}
+          const req = hf.approval_request
+          const lines = [`Task ${id}: status ${hf.status}, handoff ${h.state || "none"}`]
+          lines.push(`  worker request: ${h.context?.worker_request || h.next_action || "(none recorded)"}`)
+          if (req) {
+            lines.push(`  pending approval request ${req.id} by ${req.by} (${req.source?.channel || "?"}) at ${req.at}`)
+            if (req.instructions) lines.push(`    instructions for the worker: ${req.instructions}`)
+            if (req.note) lines.push(`    note: ${req.note}`)
+            if (req.profile || req.timeout_minutes) lines.push(`    profile: ${req.profile || "(same)"}, timeout: ${req.timeout_minutes || "(default)"} min`)
+          } else lines.push("  no supervisor approval request pending")
+          if (f.instructions) lines.push(`  your instructions (sent instead): ${f.instructions}`)
+          console.error(lines.join("\n"))
+          requestId = f["request-id"] || req?.id
+          if (process.stdin.isTTY && !f.yes) {
+            const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stderr })
+            const ans = await rl.question(`${cmd === "approve" ? "Approve" : "Reject"} this${requestId ? ` (request ${requestId})` : ""}? [y/N] `)
+            rl.close()
+            if (!/^y(es)?$/i.test(ans.trim())) throw new Error("aborted; nothing was sent")
+          }
         }
       }
       out(await rpc("approve_task", {
-        task_id: id, decision: cmd, ...(opTok ? { operator_token: opTok } : {}),
+        task_id: id, decision: cmd, ...(opTok ? { operator_token: opTok } : {}), ...(opTok && requestId ? { request_id: requestId } : {}),
         ...(f.instructions ? { instructions: f.instructions } : {}), ...(f.note ? { note: f.note } : {}),
         ...(f.timeout ? { timeout_minutes: Number(f.timeout) } : {}), ...(f.profile ? { profile: f.profile } : {}), ...(f.by ? { by: f.by } : {}),
-      }, { caller: { client: "workhorse" } }))
+      }, caller))
       break
     }
     case "wait": {
@@ -214,8 +242,8 @@ try {
       console.log(`\n${"day".padEnd(11)} ${"profile".padEnd(18)} ${"tasks".padStart(5)} ${"runs".padStart(5)} ${"tokens".padStart(9)} ${"est.cost".padStart(10)}`)
       for (const d of r.by_day) console.log(`${d.day.padEnd(11)} ${d.profile.padEnd(18)} ${String(d.tasks).padStart(5)} ${String(d.runs).padStart(5)} ${k(tok(d.tokens)).padStart(9)} ${usd(d.est_list_cost_usd).padStart(10)}`)
       const se = r.supervisor_estimate
-      console.log(`\nSupervisor tokens avoided (ESTIMATE): ~${k(se.est_supervisor_tokens_avoided)} over ${se.successful_tasks} successful task(s)` + (se.est_supervisor_cost_avoided_usd !== null ? `, ~$${se.est_supervisor_cost_avoided_usd} net` : ""))
-      console.log(`  supervisor I/O with workhorse: ${se.supervisor_io.calls} call(s), ~${k(se.supervisor_io.est_tokens)} tokens; worker work tokens: ${k(se.worker_work_tokens)}`)
+      console.log(`\nSupervisor tokens avoided (ESTIMATE): ~${k(se.est_supervisor_tokens_avoided)} over ${se.successful_tasks} successful task(s)` + (se.est_net_usd !== null ? `, ~$${se.est_net_usd} net of worker cost` : ""))
+      console.log(`  supervisor I/O with workhorse: ${se.supervisor_io.calls} call(s), ~${k(se.supervisor_io.est_tokens)} tokens; worker output tokens counted: ${k(se.worker_output_tokens)} (worker input not counted)`)
       console.log(`  formula: ${se.formula}`)
       console.log(`  ${se.caveat}`)
       break
