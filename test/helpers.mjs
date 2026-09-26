@@ -184,7 +184,9 @@ export async function stopDaemon(p, sig = "SIGTERM", timeoutMs = 60000) {
   if (!p || p.exitCode !== null || p.signalCode !== null) return
   const exited = new Promise((r) => p.once("exit", r))
   try { process.kill(-p.pid, sig) } catch { try { process.kill(p.pid, sig) } catch {} }
-  await Promise.race([exited, sleep(timeoutMs)])
+  let timer
+  await Promise.race([exited, new Promise((r) => { timer = setTimeout(r, timeoutMs) })])
+  clearTimeout(timer) // do not keep the test process alive for the timeout
 }
 
 export async function waitFor(rpc, id, pred, timeoutMs = 120000) {
