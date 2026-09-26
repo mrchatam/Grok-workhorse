@@ -154,7 +154,10 @@ pinned_install() { # <pin name> <npm package> <version> <target dir> <exe>
     rm -rf "$dir"; mkdir -p "$dir/bin"
     cp "$pin/package.json" "$pin/package-lock.json" "$dir/"
     (cd "$dir" && "$NPM" ci --no-audit --no-fund --loglevel=error >/dev/null) || return 1
-    ln -sfn "../node_modules/$pkg/bin/$exe" "$dir/bin/$exe"
+    # The link target comes from the package's own package.json "bin" field (not bin/<exe>).
+    local rel; rel="$("$NODE" "$SRC/scripts/pin-bin.mjs" "$dir" "$pkg" "$exe")" || return 1
+    ln -sfn "../node_modules/$pkg/$rel" "$dir/bin/$exe"
+    [ -e "$dir/bin/$exe" ] || { warn "$dir/bin/$exe -> ../node_modules/$pkg/$rel is a dangling link"; return 1; }
     ok "installed $pkg@$ver into $dir from the committed lockfile (integrity-checked)"
   else
     "$NPM" install -g --prefix "$dir" "$pkg@$ver" --no-audit --no-fund --loglevel=error >/dev/null || return 1
