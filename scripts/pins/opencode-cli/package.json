@@ -1,0 +1,8 @@
+{
+  "name": "workhorse-pin-opencode-cli",
+  "private": true,
+  "description": "Integrity-pinned OpenCode CLI for scripts/install.sh --with-opencode (npm ci). Regenerate: npm install --package-lock-only",
+  "dependencies": {
+    "opencode-ai": "1.18.32"
+  }
+}
