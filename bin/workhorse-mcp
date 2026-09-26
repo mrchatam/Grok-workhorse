@@ -10,7 +10,7 @@ import { daemonConfig, secretEnvNames, VERSION } from "../lib/config.mjs"
 const caller = { shim_pid: process.pid, ppid: process.ppid, client: process.env.WH_CALLER || null }
 const server = new McpServer({ name: "grok-workhorse", version: VERSION }, {
   instructions:
-    "Delegate coding tasks to a sandboxed coding-agent worker (Kilo CLI, OpenCode, ... per profile) running on the model profiles the owner configured (see list_models). Workflow: list_repos / list_models once -> delegate_task -> poll task_status every 30-60 s until terminal -> task_result (small structured summary) -> optionally task_details for the diff or logs -> review/merge the branch yourself -> cleanup_task. Workers never commit, merge or push; changes stay uncommitted in the task's worktree.",
+    "Delegate coding tasks to a sandboxed coding-agent worker (Kilo CLI, OpenCode, ... per profile) running on the model profiles the owner configured (see list_models). Workflow: list_repos / list_models once -> delegate_task -> poll task_status every 30-60 s until terminal -> task_result (small structured summary; its handoff.next_action says exactly what to do next and who must do it) -> optionally task_details for the diff or logs -> review/merge the branch yourself -> cleanup_task. Status needs_approval means the task is parked for a human decision: relay handoff.next_action and answer with approve_task. Record your own handoffs with update_handoff. Workers never commit, merge or push; changes stay uncommitted in the task's worktree.",
 })
 
 let ready = null
@@ -76,11 +76,11 @@ tool(
   },
 )
 
-tool("task_status", "Cheap progress check for a task: status (queued, running, retry_wait, testing, completed, failed, timeout, stalled, cancelled, interrupted), phase, elapsed time, seconds since last worker activity, turn/tool counts, and verdict once finished.", { task_id: taskId })
+tool("task_status", "Cheap progress check for a task: status (queued, running, retry_wait, testing, completed, failed, timeout, stalled, cancelled, interrupted, or needs_approval = parked for a human decision), phase, elapsed time, seconds since last worker activity, turn/tool counts, and once finished the verdict and a handoff summary (state, owner, next_action). terminal is true once no worker is running (including needs_approval).", { task_id: taskId })
 
 tool(
   "task_result",
-  "Structured result of a finished task (small): verdict (success, tests_failed, no_changes, success_untested, worker_error, timeout, stalled, cancelled, interrupted, blocked, integrity_violation), worker summary, files_changed + diffstat, daemon-run test results, errors, remaining_concerns, branch/worktree/diff_path, timings, token usage/cost, activity counts. Use task_details for the full diff or logs.",
+  "Structured result of a finished task (small): verdict (success, tests_failed, no_changes, success_untested, worker_error, timeout, stalled, cancelled, interrupted, blocked, integrity_violation), worker summary, files_changed + diffstat, daemon-run test results, errors, remaining_concerns, branch/worktree/diff_path, timings, token usage/cost, activity counts, and the handoff record: state (done, needs_fix, needs_review, needs_approval, needs_input, blocked, retryable, closed), failed_checks, owner (who acts next), next_action (one exact instruction), resume (tool + suggested args, session/worktree/branch) and context. Use task_details for the full diff or logs.",
   { task_id: taskId },
 )
 
@@ -98,7 +98,7 @@ tool(
 
 tool(
   "continue_task",
-  "Send follow-up instructions to a finished (or failed/timed-out/interrupted/cancelled) task. The worker resumes the same agent session in the same worktree (when the profile uses the same backend; otherwise a fresh session in the same worktree), then tests and the result are recomputed. Use it for fixes after your review instead of starting over.",
+  "Send follow-up instructions to a finished (or failed/timed-out/interrupted/cancelled/needs_approval) task. The worker resumes the same agent session in the same worktree (when the profile uses the same backend; otherwise a fresh session in the same worktree), then tests and the result are recomputed. Use it for fixes after your review instead of starting over.",
   {
     task_id: taskId,
     instructions: z.string().min(1).max(20000).describe("What to change or fix next"),
@@ -111,10 +111,11 @@ tool("cancel_task", "Stop a queued or running task. The worktree and partial cha
 
 tool(
   "list_tasks",
-  "List recent tasks (newest first) with status and verdict.",
+  "List recent tasks (newest first) with status, verdict and handoff (state, owner, next_action).",
   {
-    status: z.string().max(20).optional().describe("Filter: a status name, 'active' or 'terminal'"),
+    status: z.string().max(20).optional().describe("Filter: a status name, 'active', 'terminal', 'parked' (needs_approval) or 'needs_attention' (parked tasks plus finished tasks whose handoff is not done/closed)"),
     repo: z.string().max(64).optional(),
+    owner: z.string().max(80).optional().describe("Filter by handoff owner, e.g. 'human' or 'supervisor'"),
     limit: z.number().int().min(1).max(200).optional().describe("Default 20"),
   },
 )
@@ -125,6 +126,35 @@ tool(
   {
     task_id: taskId,
     discard_unmerged_changes: z.boolean().optional().describe("Set true only to deliberately throw away unmerged work"),
+  },
+)
+
+const by = z.string().max(80).optional().describe("Who is acting, recorded in the handoff and audit log (default 'supervisor')")
+
+tool(
+  "update_handoff",
+  "Update a finished task's handoff record so a later agent or a human can pick it up without guessing: owner (who acts next), next_action (one exact instruction), state and/or a note. Setting state needs_approval or needs_input parks the task for a human (status needs_approval, worktree kept); any other state unparks it.",
+  {
+    task_id: taskId,
+    state: z.enum(["done", "needs_fix", "needs_review", "needs_approval", "needs_input", "blocked", "retryable", "closed"]).optional(),
+    owner: z.string().max(80).optional().describe("'supervisor', 'human' or a named owner"),
+    next_action: z.string().max(2000).optional().describe("One exact, concrete instruction for the owner"),
+    note: z.string().max(2000).optional().describe("Free-text note appended to the handoff"),
+    by,
+  },
+)
+
+tool(
+  "approve_task",
+  "Answer a task that is parked (needs_approval) or blocked. decision=approve resumes it in the same session and worktree with the approval (and optional instructions) sent to the worker. decision=reject with instructions resumes it telling the worker not to do it; without instructions it closes the task (status cancelled, worktree kept). Approval does not lift sandbox rules.",
+  {
+    task_id: taskId,
+    decision: z.enum(["approve", "reject"]),
+    instructions: z.string().max(20000).optional().describe("Answer or extra instructions for the worker"),
+    note: z.string().max(2000).optional().describe("Reason, recorded with the decision"),
+    timeout_minutes: z.number().min(0).max(1440).optional(),
+    profile: z.string().max(32).optional(),
+    by,
   },
 )
 

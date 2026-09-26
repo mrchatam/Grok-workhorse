@@ -12,7 +12,7 @@ you (or your supervisor) review the branch and decide.
 
 - Repo: https://github.com/mrchatam/Grok-workhorse
 - License: MIT (vendored skills: MIT, see [NOTICE](NOTICE))
-- Status: v0.1.0, Linux only
+- Status: v0.2.0 in development (latest release v0.1.0), Linux only
 
 ## Features
 
@@ -23,6 +23,7 @@ you (or your supervisor) review the branch and decide.
 - **Defense in depth**: a repo allowlist, a test-command allowlist (anchored regexes), an allowlist of clone hosts, a guard plugin/hook for git mutation, network clients and secret access, a read-only git object store, and root-owned config.
 - **Structured results**: verdict (`success`, `tests_failed`, `no_changes`, `blocked`, `integrity_violation`, ...), diffstat, daemon-run test results, the worker's self-report, concerns, token usage and timings. Raw logs are paged on demand.
 - **Follow-ups and reviews**: `continue_task` resumes the same session and worktree. `mode: "review"` runs a read-only reviewer on another task's diff.
+- **Handoff records and human approval**: every finished task says who acts next (`owner`), the one exact `next_action`, which checks failed, and how to resume. A worker that needs a human decision parks the task as `needs_approval` (worktree kept) until someone answers with `approve_task`. Supervisors record their own handoffs with `update_handoff`. See [docs/handoff.md](docs/handoff.md).
 - **Operations**: stall detection (15 min by default), wall-clock timeouts, cancel, recovery after a daemon restart, retention sweeps, an append-only JSONL audit log, and `workhorse health` for daily checks.
 - **Credentials from the environment first** (daemon env, or the MCP connector env passed through the shim), with an optional secret-store fallback. Keys never appear in argv, logs or results.
 
@@ -44,7 +45,7 @@ flowchart LR
   R --> M
 ```
 
-More detail: [docs/architecture.md](docs/architecture.md).
+More detail: [docs/architecture.md](docs/architecture.md). Handoff records and the approval flow: [docs/handoff.md](docs/handoff.md).
 
 ## Security model (short version)
 
@@ -166,8 +167,8 @@ tests only. See [docs/adapters.md](docs/adapters.md) for the adapter interface a
 - **getting-started**: walks a new user through choosing a provider and model, adding repos, storing
   the key securely, running the installer, registering the stdio connector and running the first task.
 - **delegation**: how a supervisor should delegate. It reads `list_models` and `list_repos`, writes
-  self-contained task descriptions, polls, reviews the result and diff, uses `continue_task` for fixes,
-  and merges or cleans up.
+  self-contained task descriptions, polls, reviews the result and diff, follows `handoff.next_action`,
+  uses `continue_task` for fixes, relays approvals, and merges or cleans up.
 
 Copy them into your Grok Bot skills if you want them. Nothing in this repo installs them automatically.
 
@@ -178,6 +179,9 @@ workhorse start|stop|restart|status     supervisor + daemon (runs as the service
 workhorse health [--json]               full check (exit 1 on FAIL), good for a daily cron
 workhorse backends                      adapters: status, installed, capabilities
 workhorse tasks | logs | audit          recent tasks, daemon log, audit log
+workhorse attention                     tasks that need someone (parked or handoff not done)
+workhorse handoff <id> [--owner O --next "..." --note "..." --state S]   show or update a handoff
+workhorse approve <id> | reject <id>    answer a parked (needs_approval) task
 workhorse cleanup-old [--days N]        retention sweep now
 workhorse repos | add-repo | remove-repo | validate | check-provider | hello
 ```

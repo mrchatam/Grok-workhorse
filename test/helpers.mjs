@@ -158,20 +158,35 @@ export function startMock(env) {
   })
 }
 
+// Starts a daemon and waits until it (this pid) is listening. The daemon itself waits for a previous
+// daemon that is still shutting down.
 export async function startDaemon(env, extraEnv = {}) {
-  try { fs.unlinkSync(path.join(env.dataDir, "run", "daemon.sock")) } catch {}
   const p = spawn(process.execPath, [path.join(APP, "bin/workhorsed")], {
     env: { PATH: process.env.PATH, HOME: process.env.HOME, WH_CONFIG_DIR: env.cfgDir, WH_DATA_DIR: env.dataDir, ...extraEnv },
     stdio: ["ignore", fs.openSync(path.join(env.root, "daemon.log"), "a"), fs.openSync(path.join(env.root, "daemon.log"), "a")],
     detached: true,
   })
   const sock = path.join(env.dataDir, "run", "daemon.sock")
-  for (let i = 0; i < 300; i++) {
-    if (fs.existsSync(sock)) break
+  const pidFile = path.join(env.dataDir, "run", "daemon.pid")
+  const ours = () => {
+    try { return Number(fs.readFileSync(pidFile, "utf8")) === p.pid } catch { return false }
+  }
+  for (let i = 0; i < 900 && !(ours() && fs.existsSync(sock)); i++) {
+    if (p.exitCode !== null) throw new Error(`daemon exited with ${p.exitCode} during startup; see ${path.join(env.root, "daemon.log")}`)
     await sleep(100)
   }
-  await sleep(200)
+  await sleep(100)
   return p
+}
+
+// Signals the daemon's process group and waits until the daemon process has exited.
+export async function stopDaemon(p, sig = "SIGTERM", timeoutMs = 60000) {
+  if (!p || p.exitCode !== null || p.signalCode !== null) return
+  const exited = new Promise((r) => p.once("exit", r))
+  try { process.kill(-p.pid, sig) } catch { try { process.kill(p.pid, sig) } catch {} }
+  let timer
+  await Promise.race([exited, new Promise((r) => { timer = setTimeout(r, timeoutMs) })])
+  clearTimeout(timer) // do not keep the test process alive for the timeout
 }
 
 export async function waitFor(rpc, id, pred, timeoutMs = 120000) {

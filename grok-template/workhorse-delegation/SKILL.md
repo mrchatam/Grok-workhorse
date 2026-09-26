@@ -35,7 +35,8 @@ Split large work into independent tasks, and never put secrets in the task text.
 ## 4. Wait
 `delegate_task` returns a `task_id` immediately. Check `task_status` every 1-2 minutes, not in a tight
 loop. A few minutes with no turns usually means the provider is queueing. The daemon detects stalls
-on its own.
+on its own. Stop polling when `terminal` is true. That includes `needs_approval`, which means the task
+is parked and waiting for a human decision.
 
 ## 5. Review (`task_result`, then `task_details` as needed)
 - `integrity.commits_made` must be 0 and `main_clone_unchanged` must be true. If not, reject and tell the user.
@@ -44,12 +45,30 @@ on its own.
   weakened tests, hard-coded outputs, new dependencies and stray tool files.
 - Verdicts: `success`, `tests_failed`, `no_changes`, `success_untested`, `blocked`, `worker_error`,
   `timeout`, `stalled`, `cancelled`, `interrupted`, `integrity_violation`.
+- **Read `handoff` first.** `handoff.state` (done, needs_fix, needs_review, needs_approval, needs_input,
+  blocked, retryable, closed), `handoff.owner` (who acts next) and `handoff.next_action` (one exact
+  instruction) tell you what to do. `handoff.failed_checks` lists the facts (failing tests with names,
+  blocked calls, integrity, timeout or stall). `handoff.resume` has a suggested tool call and says whether
+  the session and worktree can be reused. Don't guess past it.
 
 ## 6. Next step
 - **Accept**: tell the user what changed, where it is (`branch`, `worktree_path`, `diff_path`) and the
   test evidence. Commit, push or open a PR only if the user asked.
 - **Revise**: `continue_task` with specific feedback (same session and worktree). This also works for
-  `interrupted`, `timeout` and `stalled` tasks.
+  `interrupted`, `timeout`, `stalled` and `needs_approval` tasks. `handoff.resume.args` is a good
+  starting point.
+- **Human approval** (`status: needs_approval`, `handoff.owner: "human"`): relay `handoff.next_action`
+  to the user word for word and wait for their answer. Don't approve on their behalf. Then call
+  `approve_task` with `decision: "approve"` (put their answer or conditions in `instructions`) or
+  `decision: "reject"` (with `instructions` to redirect the worker, or without them to close the task).
+  Approval does not lift sandbox rules. If the request needs network or an install, the user must do that
+  outside first.
+- **Hand off**: when you stop before the task is done (the user must decide, you ran out of time, you
+  are waiting on something), call `update_handoff` with the `owner`, one exact `next_action` and a
+  `note`, so a later agent or the user can resume without guessing. Use `state: "needs_approval"` or
+  `"needs_input"` to park it for a human (this also keeps its worktree from retention cleanup), and
+  `state: "closed"` when it needs nobody.
+- **Find open work**: `list_tasks` with `status: "needs_attention"` (optionally `owner: "human"`).
 - **Second opinion**: `delegate_task` with `mode: "review"` and `review_task_id`.
 - **Stop**: `cancel_task`. Use `cleanup_task` only once the user no longer needs the work (it archives
   the patch and refuses unmerged changes unless told to discard them).

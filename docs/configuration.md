@@ -76,7 +76,7 @@ Every key is optional. Defaults are in `lib/config.mjs`.
 | `max_concurrent` | 2 | Tasks running at once |
 | `timeouts` | default 30, min 1, max 120, **stall 15**, test 10 (minutes), kill_grace_sec 10 | |
 | `retry` | 2 retries, back-off [30, 120] s, provider cooldown 60 s | For retryable model API errors |
-| `retention` | enabled, worktree_days 7, task_days 30, sweep every 60 min | Automatic cleanup |
+| `retention` | enabled, worktree_days 7, task_days 30, parked_days null, sweep every 60 min | Automatic cleanup. Parked (`needs_approval`) tasks are skipped unless `parked_days` is set. When it is set, their worktree is removed that many days after the last handoff update and the task is closed ([handoff.md](handoff.md)) |
 | `default_backend` | `kilo` | Backend for profiles without `backend` |
 | `bwrap` | auto: bundled with Kilo, else `bwrap` on PATH | |
 | `backends.<name>` | `bin` (auto: `$WH_<NAME>_BIN`, `<prefix>/<name>-cli/bin/<exe>`, PATH), `expected_version`, `config_dir`, `home` | Per-backend settings; `kilo` also has `session_retry_limit` |

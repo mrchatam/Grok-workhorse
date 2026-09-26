@@ -70,6 +70,11 @@
 - Workers can read the repo's full git history (the object store is bound read-only).
 - The pattern guards are a second layer. If you find a bypass of the *sandbox*, please report it (see
   [SECURITY.md](../SECURITY.md)).
+- `approve_task` is a coordination signal, not a permission grant. It never widens the sandbox or
+  the guard. The approver name (`by`) is recorded as given, and any client holding the daemon socket
+  and token (the supervisor included) can approve. The recorded `source.channel` (`mcp` / `cli`) is
+  self-declared by the client for the same reason; `source.auth` says what was verified. Keep a human in the loop at the supervisor level when
+  approvals matter.
 
 ## Recommendations
 

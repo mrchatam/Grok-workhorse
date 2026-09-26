@@ -47,6 +47,17 @@ The worker tried something the policy denies (a git commit, network, paths outsi
 `task_result.blocked_examples` shows the calls. That is usually fine. If a legitimate build step needs
 something, provide it through `ro_binds` and `sandbox_env` rather than loosening the guard.
 
+If the worker considers the blocked action necessary (or asks for approval/input), the task is parked
+in status `needs_approval`. `task_result.handoff.next_action` names the exact request. Do the action
+yourself if it needs network or an install, then `workhorse approve <id>` (or `approve_task`), or
+`workhorse reject <id>`. See [handoff.md](handoff.md).
+
+## Parked tasks pile up
+
+`workhorse attention` lists tasks that need someone. Parked tasks keep their worktree until they are
+answered, closed (`workhorse reject <id>`) or cleaned up (`cleanup_task`). To expire them
+automatically, set `retention.parked_days`.
+
 ## Builds fail inside the sandbox (Go, npm, pip)
 
 There is no network (Kilo) and no writable HOME cache, so dependencies must be available offline.

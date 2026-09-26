@@ -101,8 +101,7 @@ H.itest("entry added later is loaded at task spawn, used, redacted and never per
 })
 
 H.itest("daemon restart loads the key from the store at startup", async () => {
-  process.kill(-daemon.pid, "SIGTERM")
-  await H.sleep(1500)
+  await H.stopDaemon(daemon)
   daemon = await H.startDaemon(env)
   const h = await rpc("health", {})
   assert.deepEqual(h.credential_sources, [{ name: "NVIDIA_API_KEY", source: "secret_store" }])
