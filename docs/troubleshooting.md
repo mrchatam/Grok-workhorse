@@ -39,7 +39,31 @@ store. Put it in the connector env (recommended) or restart the daemon from an e
 `stalled` means no output from the agent for `timeouts.stall_min` (15 min by default), which is often
 a hung provider or a model stuck in a long reasoning step. `timeout` means the wall-clock limit was hit.
 Check `task_details kind=activity` and `stderr`, then use `continue_task` (it resumes the session) or
-choose a faster profile.
+choose a faster profile. A profile's `stall_minutes` overrides the stall timeout for that profile only
+(for example shorter for a fast cheap model, longer for a slow reasoning model).
+
+## `wait_task` returns `done: false`
+
+Normal for tasks longer than `max_wait_s` (cap 55 s): call it again. If your MCP client uses a request
+timeout shorter than 60 s, pass a smaller `max_wait_s`.
+
+## Automatic follow-ups did not run, or stopped early
+
+Check `result.auto` (`trail`, `stopped_reason`): `max_auto_runs`, `max_tokens` or `max_cost_usd` was
+reached, the verdict was not in `auto.fix_on` / `auto.escalate_on`, or the profile has no `escalate_to`.
+`max_cost_usd` needs `price_per_mtok` on the profiles. Automatic follow-ups apply to implement tasks only.
+
+## `approve_task` says "approval recorded as a request"
+
+`approvals.require_operator` is on. A human must run `sudo workhorse approve <task_id>` on the host
+(it reads the operator token file). `operator token rejected` means the file does not match
+`approvals.operator_token_sha256`: re-run `sudo workhorse operator-token init --force --enable` and restart.
+
+## RTK is enabled but commands are not rewritten
+
+`workhorse token-savers` shows whether the binary was found. RTK applies to Kilo and OpenCode only,
+needs an absolute `rtk.bin` or `rtk` on the daemon's `env_path`, and leaves commands alone when it has
+no equivalent (exit 1) or when the command spans several lines. Tests run by the daemon never use it.
 
 ## Verdict `blocked` or many blocked calls
 

@@ -6,6 +6,59 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - Unreleased
+
+Token savings. Workhorse exists to reduce supervisor (for example Grok) usage by letting smaller,
+user-chosen models do bounded work; this release cuts what the supervisor reads and how often it has to
+act, and adds opt-in savers for the workers. Builds on 0.2.0. See [docs/token-savings.md](docs/token-savings.md).
+
+### Added
+- **`wait_task`** (MCP, RPC, `workhorse wait`): long-poll one task (`task_id`) or several (`task_ids`,
+  `mode: "any" | "all"`) until they finish or park, up to `max_wait_s` (default 45, cap 55 s to stay
+  under common 60 s MCP request timeouts). Returns the brief result.
+- **`view: "brief"`** for `task_result` and `wait_task` (~0.5-1 KB: verdict, short summary, files,
+  tests, concerns, `next` with the suggested call, review, automatic trail, tokens). `full` stays the
+  default for `task_result`.
+- **`delegate_tasks`**: up to 10 tasks in one call, with per-entry errors.
+- **Presets and size routing** in `profiles.json`: `presets` (profile, size, mode, timeout, test
+  command, standing instructions, follow-up flags) and `routing` (`small`/`medium`/`large` -> profile).
+  `list_models` shows them.
+- **Automatic follow-ups** (off by default; per call, per preset or `profiles.json` `auto`):
+  `auto_fix_rounds` (same-session fix rounds after failing tests or a missing/partial RESULT, max 3),
+  `escalate` along each profile's new `escalate_to` chain (fresh session, same worktree), hard caps
+  `max_auto_runs` (default 3, cap 6), `max_tokens`, `max_cost_usd`. The trail is in `result.auto`.
+- **`auto_review`**: an advisory read-only review on a (cheap) profile after a successful run; new
+  transient status `reviewing`. `request_changes` makes the handoff `needs_review`.
+- **`usage_report`** (MCP, RPC) and **`workhorse stats`**: worker tokens and estimated list cost by
+  profile and day, plus a clearly labelled ESTIMATE of supervisor tokens avoided (formula documented;
+  optional `daemon.json supervisor.price_per_mtok` for USD). The daemon now records per-run tokens and
+  cost, and the characters each supervisor call sent and received.
+- **Worker token savers** (`token_savers` in daemon.json, per-profile override; all off by default):
+  `terse` and `minimal_code` instruction fragments (`lite`/`full`, our own wording inspired by Caveman
+  and Ponytail) and `rtk` (Kilo/OpenCode: the guard plugin rewrites worker bash commands through
+  `rtk rewrite`). `workhorse token-savers`, installer `--token-savers` / `--rtk-bin`. The daemon's own
+  test run never goes through them.
+- **`approvals.require_operator`**: MCP `approve_task` only records an approval request; a human
+  confirms with `sudo workhorse approve <id>`, which sends a separate operator token (the daemon stores
+  its SHA-256). `workhorse operator-token init [--enable]`.
+- **Per-profile `stall_minutes`.**
+- **Audit log rotation** (`audit.max_mb`, `audit.keep`).
+- **Test-only stub backend** (`adapters/stub`), registered only when the daemon runs with
+  `WH_ENABLE_STUB_BACKEND=1` and limited to its bundled script, so the approval, continue, retry,
+  fallback, restart, handoff, auto-fix, escalation and review flows run end to end in GitHub Actions
+  (`npm run test:stub`). `workhorse health` warns if a daemon runs with the flag.
+
+### Changed
+- The MCP shim returns compact JSON (9-18% fewer characters on typical responses).
+- The full `task_result` no longer repeats top-level fields inside `handoff.context` (`get_handoff`
+  still returns the complete record).
+- `delegate_task`'s `next_step` and the MCP instructions point to `wait_task`; the delegation skill draft
+  prefers `wait_task`, the brief view, presets/size, batches and automatic follow-ups.
+- The installer installs Kilo CLI and OpenCode from committed lockfiles (`scripts/pins/`, `npm ci`,
+  integrity-checked) when the pinned version is requested, and falls back to `npm install -g` with a
+  warning otherwise.
+- CI runs the unit tests, then the stub end-to-end suite.
+
 ## [0.2.0] - Unreleased
 
 Task handoff records and a human-approval state, based on community feedback. A supervisor should keep a

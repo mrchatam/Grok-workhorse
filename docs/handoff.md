@@ -15,7 +15,9 @@ asked to write it. When the worker reports `status: blocked`, `needs_approval` o
 
 | Where | What |
 |---|---|
-| `task_result` | the full record under `handoff` |
+| `task_result` (full view, default) | the record under `handoff`; since v0.3 its `context` no longer repeats fields that are already top-level in the same response (verdict, status, summary, remaining_concerns, diffstat, files_changed, diff_path, diff) |
+| `task_result` with `view: "brief"`, `wait_task` | `next`: state, owner, action (first 500 chars) and the suggested `tool` + `args` |
+| `get_handoff` (RPC) / `workhorse handoff <id>` | the complete record, including the full `context` |
 | `task_status` | `handoff`: state, owner, next_action (first 300 chars), names of failed checks, updated_at/by |
 | `list_tasks` | `handoff`: state, owner, next_action per task; filters `status: "needs_attention"`, `status: "parked"`, `owner` |
 | `task.json` | persisted with the task, so it survives daemon restarts |
@@ -145,9 +147,44 @@ grant. The guard and bwrap rules still apply, so a worker still cannot reach the
 packages. If the approved action needs that (for example adding a dependency to an offline cache), the
 human does it outside the sandbox first and then approves. The `next_action` text says so.
 
+## Operator confirmation (`approvals.require_operator`, v0.3)
+
+By default the supervisor's `approve_task` is final. An owner who wants a human in the loop for every
+approval sets `daemon.json` `approvals.require_operator: true` (easiest: `sudo workhorse operator-token
+init --enable`, which writes a random token to a root-only file and stores only its SHA-256 in
+daemon.json). Then:
+
+1. MCP `approve_task` (from the supervisor) does not resume anything. It records an
+   **approval request** (`decision`, `instructions`, `by`, time) on the task, returns
+   `approval_requested: true` (handoff owner `human (operator)`), and the brief/full result shows
+   `approval_request`. Rejections do not need the operator: they only stop or redirect work.
+2. A human runs `sudo workhorse approve <id>` (or `reject`). The CLI reads the token file and sends
+   the token; the daemon checks it against the hash (constant-time) and applies the recorded request's
+   instructions unless the CLI passes its own.
+3. `continue_task` and `update_handoff` cannot unpark a parked task without the token either, so the
+   supervisor cannot route around the gate. The token is never an MCP parameter, is masked in the
+   audit log, and never appears in results.
+
+## Automatic follow-ups, reviews and handoff (v0.3)
+
+With `auto_fix_rounds`, `escalate` or `auto_review` (per call, per preset or in `profiles.json`
+`auto`), the daemon runs routine follow-ups itself before it settles the handoff:
+
+- A fix round or escalation step happens instead of a `needs_fix` / `retryable` handoff to the
+  supervisor. Only the final run's handoff is reported; `result.auto.trail` lists every step
+  (`profile`, `verdict`, `next`) and the handoff's `next_action` gets a one-line note of the trail. If a
+  cap stops the chain, `auto.stopped_reason` says which one.
+- An auto-review runs as a separate read-only task after a successful run; the parent shows status
+  `reviewing` meanwhile (not terminal; `wait_task` keeps waiting). Its verdict is advisory:
+  `approve` leaves the handoff `done` (with a note); `request_changes` turns it into `needs_review`
+  with a failed check `auto_review`, the findings, and a suggested `continue_task`. The daemon's own
+  verdict is never changed by a review.
+- `continue_task` on a task resets its automatic trail for the new round, and clears a pending
+  approval request.
+
 ## Supervisor loop (short)
 
-1. After `task_result`, read `handoff.state`, `owner` and `next_action`.
+1. After `wait_task` (or `task_result`), read `next` (brief) or `handoff.state`, `owner` and `next_action`.
 2. If the owner is `supervisor`, do the next action (often the `resume` suggestion). If it is `human`,
    relay `next_action` to the user verbatim and wait for their decision, then call `approve_task`.
 3. When you stop working on a task that is not done, record where it stands with `update_handoff`

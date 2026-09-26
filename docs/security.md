@@ -52,7 +52,18 @@
 9. **Root-owned config.** `lock-config.sh` makes the config, `adapters/` and the code-bearing dirs of
    each backend HOME root-owned, so a process running as the service user cannot widen its own
    permissions.
-10. **Audit.** Every RPC, task event and tool call is written as JSONL with values redacted.
+10. **Audit.** Every RPC, task event and tool call is written as JSONL with values redacted. The log is
+    rotated by size (`audit.max_mb`, `audit.keep`); the operator token is masked as `[given]`.
+11. **Test-only stub backend is gated.** `adapters/stub` (a scripted fake worker used by CI) is
+    registered only when the daemon's own environment has `WH_ENABLE_STUB_BACKEND=1`. Without it the
+    backend name is unknown, so a profile cannot select it, and even with it the adapter refuses any
+    binary other than the bundled `stub-cli.mjs`. The installer, systemd unit and supervisor never set
+    the flag, and `workhorse health` warns if a running daemon has it.
+12. **Token savers stay outside the trust boundary.** `terse` / `minimal_code` are only extra text in
+    the worker's message. The optional RTK integration runs a local binary (read-only bind) that
+    rewrites the worker's own shell commands inside the sandbox; the guard checks the command before
+    and after rewriting, and the daemon's test run never goes through it. No proxy sees prompts or
+    keys (Headroom-style proxies are deliberately not integrated; see [token-savings.md](token-savings.md)).
 
 ## Known limitations
 
@@ -73,8 +84,8 @@
 - `approve_task` is a coordination signal, not a permission grant. It never widens the sandbox or
   the guard. The approver name (`by`) is recorded as given, and any client holding the daemon socket
   and token (the supervisor included) can approve. The recorded `source.channel` (`mcp` / `cli`) is
-  self-declared by the client for the same reason; `source.auth` says what was verified. Keep a human in the loop at the supervisor level when
-  approvals matter.
+  self-declared by the client for the same reason; `source.auth` says what was verified. See
+  `approvals.require_operator` below for putting a human in the loop.
 
 ## Recommendations
 

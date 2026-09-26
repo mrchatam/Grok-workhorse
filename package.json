@@ -1,6 +1,6 @@
 {
   "name": "grok-workhorse",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Sandboxed coding-agent workers (Kilo CLI, OpenCode, ...) that a supervising AI agent drives over MCP, with any OpenAI-compatible model provider",
@@ -26,8 +26,9 @@
   "scripts": {
     "setup": "npm ci && npm ci --prefix adapters/kilo/config && npm ci --prefix adapters/opencode/config",
     "test": "node --test --test-timeout=600000 test/*.test.mjs",
-    "test:unit": "node --test test/unit.test.mjs test/config.test.mjs test/adapters.test.mjs test/handoff.test.mjs test/handoff-flow.test.mjs test/audit.test.mjs",
-    "test:live": "WH_LIVE_TEST=1 node --test --test-timeout=1800000 test/live.test.mjs"
+    "test:unit": "node --test test/unit.test.mjs test/config.test.mjs test/adapters.test.mjs test/handoff.test.mjs test/handoff-flow.test.mjs test/audit.test.mjs test/token-savings.test.mjs",
+    "test:live": "WH_LIVE_TEST=1 node --test --test-timeout=1800000 test/live.test.mjs",
+    "test:stub": "node --test --test-timeout=600000 test/stub-e2e.test.mjs"
   },
   "engines": {
     "node": ">=22"
