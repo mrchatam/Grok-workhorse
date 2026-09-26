@@ -32,8 +32,12 @@ import claudeCode from "./claude-code/adapter.mjs"
 import codex from "./codex/adapter.mjs"
 import gemini from "./gemini/adapter.mjs"
 import aider from "./aider/adapter.mjs"
+import stub, { stubEnabled } from "./stub/adapter.mjs"
 
 export const BACKENDS = { kilo, opencode, "claude-code": claudeCode, codex, gemini, aider }
+// Test-only scripted backend: registered only when the daemon process has WH_ENABLE_STUB_BACKEND=1
+// (see adapters/stub/adapter.mjs for why production can never select it).
+if (stubEnabled()) BACKENDS.stub = stub
 
 export function backendNames() {
   return Object.keys(BACKENDS)

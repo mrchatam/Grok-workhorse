@@ -1,0 +1,72 @@
+{
+  "_comment": "Tiered example for v0.3 token savings: cheap -> mid -> strong escalation, size routing, presets and opt-in automatic follow-ups. Model ids are examples; check https://openrouter.ai/models (pick models with reliable tool calling) and set price_per_mtok from your provider's current pricing.",
+  "default_profile": "cheap",
+  "profiles": {
+    "cheap": {
+      "description": "Small coder model for small, well-specified tasks. Escalates to mid when automatic escalation is on.",
+      "model": "openrouter/qwen3-coder-small",
+      "fallback": [],
+      "escalate_to": "mid",
+      "stall_minutes": 10,
+      "token_savers": { "terse": "lite", "minimal_code": "lite" }
+    },
+    "mid": {
+      "description": "Mid-size coder model for normal implement/fix/test work.",
+      "model": "openrouter/qwen3-coder",
+      "fallback": [],
+      "escalate_to": "strong",
+      "token_savers": { "terse": "lite" }
+    },
+    "strong": {
+      "description": "Large reasoning model for hard tasks and the end of the escalation chain.",
+      "model": "openrouter/nemotron-ultra",
+      "fallback": []
+    }
+  },
+  "routing": { "small": "cheap", "medium": "mid", "large": "strong" },
+  "presets": {
+    "quick-fix": {
+      "description": "Small bounded fix with tests: cheap model, one automatic fix round, escalation on failure.",
+      "size": "small",
+      "timeout_minutes": 15,
+      "auto_fix_rounds": 1,
+      "escalate": true,
+      "instructions": "Keep the diff minimal. Do not change public APIs."
+    },
+    "feature": {
+      "description": "Normal feature work on the mid model with a cheap advisory review of the diff.",
+      "size": "medium",
+      "timeout_minutes": 30,
+      "auto_fix_rounds": 1,
+      "auto_review": "cheap"
+    },
+    "explore": {
+      "description": "Read-only investigation or code review; edits nothing.",
+      "mode": "review",
+      "size": "small",
+      "timeout_minutes": 15
+    }
+  },
+  "auto": {
+    "fix_rounds": 0,
+    "escalate": false,
+    "max_auto_runs": 3,
+    "max_tokens": 2000000,
+    "max_cost_usd": null,
+    "review": { "enabled": false, "profile": "cheap" }
+  },
+  "providers": {
+    "openrouter": {
+      "name": "OpenRouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "max_concurrent": 3,
+      "models": {
+        "qwen3-coder-small": { "id": "qwen/qwen3-coder-30b-a3b-instruct", "context": 131072, "output": 16384 },
+        "qwen3-coder": { "id": "qwen/qwen3-coder", "context": 131072, "output": 16384 },
+        "nemotron-ultra": { "id": "nvidia/nemotron-3-ultra-550b-a55b", "context": 131072, "output": 16384, "reasoning": true }
+      }
+    }
+  },
+  "kilo_overlay": {}
+}

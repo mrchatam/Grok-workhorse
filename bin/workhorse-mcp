@@ -10,7 +10,7 @@ import { daemonConfig, secretEnvNames, VERSION } from "../lib/config.mjs"
 const caller = { shim_pid: process.pid, ppid: process.ppid, client: process.env.WH_CALLER || null }
 const server = new McpServer({ name: "grok-workhorse", version: VERSION }, {
   instructions:
-    "Delegate coding tasks to a sandboxed coding-agent worker (Kilo CLI, OpenCode, ... per profile) running on the model profiles the owner configured (see list_models). Workflow: list_repos / list_models once -> delegate_task -> poll task_status every 30-60 s until terminal -> task_result (small structured summary; its handoff.next_action says exactly what to do next and who must do it) -> optionally task_details for the diff or logs -> review/merge the branch yourself -> cleanup_task. Status needs_approval means the task is parked for a human decision: relay handoff.next_action and answer with approve_task. Record your own handoffs with update_handoff. Workers never commit, merge or push; changes stay uncommitted in the task's worktree.",
+    "Delegate coding tasks to a sandboxed coding-agent worker (Kilo CLI, OpenCode, ... per profile) running on cheaper model profiles the owner configured (see list_models), to save your own tokens. Workflow: list_repos / list_models once -> delegate_task (or delegate_tasks for several; use a preset or size when the owner configured them) -> wait_task (long-poll; returns the brief result when done; repeat while done=false; do not poll task_status in a loop) -> act on next.action (who must do what) -> task_details only if you need the diff or logs -> review/merge the branch yourself -> cleanup_task. Status needs_approval means the task is parked for a human decision: relay next.action and answer with approve_task. Record your own handoffs with update_handoff. Workers never commit, merge or push; changes stay uncommitted in the task's worktree.",
 })
 
 let ready = null
@@ -48,7 +48,8 @@ function tool(name, description, shape, method = name) {
   server.registerTool(name, { description, inputSchema: shape }, async (args) => {
     try {
       const result = await call(method, args)
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+      // Compact JSON: every byte here is a token the supervisor model reads.
+      return { content: [{ type: "text", text: JSON.stringify(result) }] }
     } catch (e) {
       return { isError: true, content: [{ type: "text", text: `workhorse error: ${e.message}` }] }
     }
@@ -57,22 +58,65 @@ function tool(name, description, shape, method = name) {
 
 const taskId = z.string().regex(/^wh-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$/).describe("Task id returned by delegate_task, e.g. wh-20260926-171500-ab12")
 
+// Extra delegate_task parameters (v0.3.0): presets/size routing and automatic follow-ups.
+const delegateExtras = {
+  preset: z.string().max(64).optional().describe("Named preset from list_models (profile, size, timeout, test command and standing instructions chosen by the owner)"),
+  size: z.enum(["small", "medium", "large"]).optional().describe("Rough task size; picks the profile from the owner's routing table when no profile/preset profile is given"),
+  auto_fix_rounds: z.number().int().min(0).max(3).optional().describe("Automatic fix rounds (same session) when tests fail or the result is incomplete; default from config (usually 0)"),
+  escalate: z.boolean().optional().describe("On failure, retry automatically on the profile's escalate_to (cheap -> mid -> strong), within the owner's caps"),
+  auto_review: z.union([z.boolean(), z.string().max(32)]).optional().describe("Run a cheap advisory review of a successful diff (true = configured review profile, or a profile name)"),
+}
+
 tool("list_repos", "List the repositories a worker may be delegated to (allowlist), with default base branch and the default/allowed test commands. Only these names are accepted by delegate_task.", {})
 
-tool("list_models", "List the worker model profiles configured by the owner, with backend (coding-agent CLI), model, fallback chain, availability (credentials present, backend installed), the default profile, modes, backends, and limits (max concurrent tasks, timeout range, stall timeout).", {})
+tool("list_models", "List the worker model profiles configured by the owner, with backend (coding-agent CLI), model, fallback chain, availability (credentials present, backend installed), the default profile, presets and size routing, automatic follow-up defaults, token savers, modes, backends, and limits (max concurrent tasks, timeout range, stall timeout).", {})
+
+const delegateShape = {
+  repo: z.string().max(64).describe("Repository name from list_repos (not a path or URL)"),
+  task: z.string().min(1).max(20000).describe("Self-contained instructions: goal, relevant files/functions, constraints, acceptance criteria. The worker sees nothing else from your conversation."),
+  profile: z.string().max(32).optional().describe("Model profile name from list_models. Omit to use the configured default profile."),
+  test_command: z.string().max(500).optional().describe("Test command to verify the work. Must equal the repo's default test command or match its allowed patterns (see list_repos). Omit to use the repo default."),
+  base_ref: z.string().max(200).optional().describe("Branch, tag or commit to start from (default: repo default branch). In review mode without review_task_id: the branch to review."),
+  timeout_minutes: z.number().min(0).max(1440).optional().describe("Wall-clock limit for the worker run (default and allowed range: see list_models)."),
+  mode: z.enum(["implement", "review"]).optional().describe("'implement' (default) edits code. 'review' runs a read-only reviewer on a copy of another task's diff (review_task_id) or on base_ref's commits."),
+  review_task_id: taskId.optional().describe("With mode='review': the finished task whose diff should be reviewed."),
+  ...delegateExtras,
+}
 
 tool(
   "delegate_task",
-  "Start a coding task in the background. The daemon creates a fresh git worktree on branch workhorse/<task_id> from base_ref, runs the profile's coding-agent backend there (sandboxed: edits and shell only inside the worktree, no commits/pushes; see list_models for per-backend limits), then runs the tests itself and builds a structured result. Returns immediately with task_id; poll task_status, then call task_result. Tasks beyond the concurrency limit wait in a queue.",
+  "Start a coding task in the background. The daemon creates a fresh git worktree on branch workhorse/<task_id> from base_ref, runs the profile's coding-agent backend there (sandboxed: edits and shell only inside the worktree, no commits/pushes; see list_models for per-backend limits), then runs the tests itself and builds a structured result. Returns immediately with task_id; then call wait_task (long-poll, returns the brief result). Tasks beyond the concurrency limit wait in a queue. Optional: preset/size (owner-configured routing), auto_fix_rounds/escalate/auto_review (automatic follow-ups within the owner's caps).",
+  delegateShape,
+)
+
+tool(
+  "delegate_tasks",
+  "Start up to 10 independent tasks in one call (each entry takes the delegate_task parameters; `defaults` are merged into every entry). Partial success: each result says ok + task_id or the error. Then wait_task with task_ids.",
   {
-    repo: z.string().max(64).describe("Repository name from list_repos (not a path or URL)"),
-    task: z.string().min(1).max(20000).describe("Self-contained instructions: goal, relevant files/functions, constraints, acceptance criteria. The worker sees nothing else from your conversation."),
-    profile: z.string().max(32).optional().describe("Model profile name from list_models. Omit to use the configured default profile."),
-    test_command: z.string().max(500).optional().describe("Test command to verify the work. Must equal the repo's default test command or match its allowed patterns (see list_repos). Omit to use the repo default."),
-    base_ref: z.string().max(200).optional().describe("Branch, tag or commit to start from (default: repo default branch). In review mode without review_task_id: the branch to review."),
-    timeout_minutes: z.number().min(0).max(1440).optional().describe("Wall-clock limit for the worker run (default and allowed range: see list_models)."),
-    mode: z.enum(["implement", "review"]).optional().describe("'implement' (default) edits code. 'review' runs a read-only reviewer on a copy of another task's diff (review_task_id) or on base_ref's commits."),
-    review_task_id: taskId.optional().describe("With mode='review': the finished task whose diff should be reviewed."),
+    tasks: z.array(z.object(delegateShape).partial()).min(1).max(10).describe("delegate_task parameter objects"),
+    defaults: z.object(delegateShape).partial().optional().describe("Parameters applied to every entry unless the entry sets them (e.g. repo, profile, preset)"),
+  },
+)
+
+tool(
+  "wait_task",
+  "Long-poll: block until the task (task_id) or tasks (task_ids, mode any|all) finish or are parked, or max_wait_s passes (default 45, max 55). Finished tasks come back with their result (view brief by default: verdict, summary, files, tests, concerns, next action + resume call, usage), so no separate task_status/task_result calls are needed. If done=false, call it again.",
+  {
+    task_id: taskId.optional(),
+    task_ids: z.array(taskId).min(1).max(20).optional().describe("Several tasks; see mode"),
+    mode: z.enum(["any", "all"]).optional().describe("With task_ids: return when any (default) or all are settled"),
+    max_wait_s: z.number().min(0).max(55).optional().describe("Default 45"),
+    view: z.enum(["brief", "full", "status"]).optional().describe("Result shape for finished tasks (default brief)"),
+  },
+)
+
+tool(
+  "usage_report",
+  "Worker token use and estimated cost by profile and by day, verdict counts, and an ESTIMATE of supervisor tokens avoided by delegating (formula included in the output).",
+  {
+    days: z.number().min(1).max(3650).optional().describe("Window in days (default 30)"),
+    profile: z.string().max(32).optional(),
+    repo: z.string().max(64).optional(),
   },
 )
 
@@ -80,8 +124,8 @@ tool("task_status", "Cheap progress check for a task: status (queued, running, r
 
 tool(
   "task_result",
-  "Structured result of a finished task (small): verdict (success, tests_failed, no_changes, success_untested, worker_error, timeout, stalled, cancelled, interrupted, blocked, integrity_violation), worker summary, files_changed + diffstat, daemon-run test results, errors, remaining_concerns, branch/worktree/diff_path, timings, token usage/cost, activity counts, and the handoff record: state (done, needs_fix, needs_review, needs_approval, needs_input, blocked, retryable, closed), failed_checks, owner (who acts next), next_action (one exact instruction), resume (tool + suggested args, session/worktree/branch) and context. Use task_details for the full diff or logs.",
-  { task_id: taskId },
+  "Structured result of a finished task. view='brief' returns only what you need to decide the next step (recommended; wait_task already returns it); view='full' (default) returns everything: verdict (success, tests_failed, no_changes, success_untested, worker_error, timeout, stalled, cancelled, interrupted, blocked, integrity_violation), worker summary, files_changed + diffstat, daemon-run test results, errors, remaining_concerns, branch/worktree/diff_path, timings, token usage/cost, activity counts, and the handoff record: state (done, needs_fix, needs_review, needs_approval, needs_input, blocked, retryable, closed), failed_checks, owner (who acts next), next_action (one exact instruction), resume (tool + suggested args, session/worktree/branch) and context. Use task_details for the full diff or logs.",
+  { task_id: taskId, view: z.enum(["full", "brief"]).optional().describe("'brief' (recommended) or 'full' (default)") },
 )
 
 tool(
