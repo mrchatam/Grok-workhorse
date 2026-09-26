@@ -75,4 +75,8 @@ H.itest("graceful SIGTERM marks running tasks interrupted", async () => {
   assert.equal(fs.existsSync(`/proc/${pid}`), false)
   daemon = await H.startDaemon(env)
   assert.equal((await rpc("task_status", { task_id: r.task_id })).status, "interrupted")
+  // finalized on restart: a result and a retryable handoff exist
+  const res = await rpc("task_result", { task_id: r.task_id })
+  assert.equal(res.verdict, "interrupted")
+  assert.equal(res.handoff.state, "retryable")
 })

@@ -282,3 +282,51 @@ test("removing a parked task's worktree closes it (cleanup_task, or retention wi
   assert.equal(mgr.result(b.id).handoff.updated_by, "retention")
   assert.ok(mgr.tasks.has(b.id), "the closed task record stays (it follows normal retention from now on)")
 })
+
+test("a task stopped by a graceful shutdown (interrupted, no result) is finalized on restart", async () => {
+  const d = await mgr.delegate({ repo: "demo", task: "interrupted by shutdown", test_command: PASS })
+  const t = mgr.tasks.get(d.task_id)
+  fs.writeFileSync(path.join(t.worktree_path, "partial.txt"), "half done\n")
+  t.session_id = "ses_int"
+  t.runs.push({ n: 1, kind: "initial", profile: t.profile, backend: t.backend, started_at: new Date().toISOString(), finished_at: new Date().toISOString(), reason: "shutdown" })
+  // what shutdown() / onExit() leave behind: status interrupted, an error, no result
+  t.status = "interrupted"
+  t.errors.push("workhorse daemon stopped while this task was running. Use continue_task to resume.")
+  mgr.save(t)
+  assert.equal(mgr.result(t.id).message.includes("No result yet"), true)
+  const m2 = manager()
+  await m2.recover()
+  const r = m2.result(t.id)
+  assert.equal(r.status, "interrupted")
+  assert.equal(r.verdict, "interrupted")
+  assert.deepEqual(r.files_changed.map((f) => f.path), ["partial.txt"])
+  assert.equal(r.handoff.state, "retryable")
+  assert.equal(r.handoff.resume.tool, "continue_task")
+  assert.ok(r.handoff.failed_checks.some((c) => c.check === "interrupted"))
+  assert.ok(audit().some((l) => l.task_id === t.id && l.event === "finalize_interrupted_on_restart"))
+  const again = manager()
+  await again.recover() // idempotent: a finalized interrupted task is left alone
+  assert.equal(again.result(t.id).timings.finished_at, r.timings.finished_at)
+})
+
+test("cleanup marks the task before its first async step: continue/approve/update are refused meanwhile", async () => {
+  const t = await finishedTask({ text: RESULT("needs_approval", "needs: approve Z") })
+  const pending = mgr.cleanup(t.id, true) // not awaited: removal is in progress
+  await assert.rejects(mgr.continueTask(t.id, "more"), /being cleaned up/)
+  await assert.rejects(mgr.approve({ task_id: t.id, decision: "approve" }), /being cleaned up/)
+  assert.throws(() => mgr.updateHandoff({ task_id: t.id, note: "x" }), /being cleaned up/)
+  await assert.rejects(mgr.cleanup(t.id, true), /being cleaned up/)
+  const sw = await mgr.sweep({ worktree_days: 0, parked_days: 0, dry_run: true })
+  assert.ok(!sw.worktrees_removed.includes(t.id), "retention skips a task being cleaned up")
+  await pending
+  assert.equal(t.worktree_removed, true)
+  assert.equal(t.status, "cancelled")
+  assert.equal(mgr.cleaning.size, 0)
+  await assert.rejects(mgr.continueTask(t.id, "more"), /cleaned up; delegate a new task/)
+  // same guard during retention's worktree removal
+  const u = await finishedTask({ text: RESULT("done") })
+  const p2 = mgr.removeTaskWorktree(u, "test")
+  await assert.rejects(mgr.continueTask(u.id, "more"), /being cleaned up/)
+  await p2
+  assert.equal(mgr.cleaning.size, 0)
+})

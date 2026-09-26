@@ -50,6 +50,11 @@ can resume it without guessing.
 - `list_tasks status: "terminal"` also includes parked tasks, since no worker is running.
 
 ### Fixed
+- A task stopped by a graceful daemon shutdown (`workhorse stop`, SIGTERM) was marked `interrupted`
+  but never finalized, so it had no result and no handoff. It is now finalized on the next start.
+- `cleanup_task` and retention mark a task before their first async step. While its worktree is being
+  removed, `continue_task`, `approve_task`, `update_handoff` and a second cleanup are refused instead of
+  queueing a run into a worktree that is being deleted.
 - Audit log: the `run_started` event's run kind (`initial`, `continue`, `retry`, `fallback`) overwrote
   the record's `kind` (`task`). It is now `run_kind`. Reserved audit fields (`ts`, `kind`, and
   `task_id`, `event`, `status` on task events) can no longer be overwritten by event data. A clashing
