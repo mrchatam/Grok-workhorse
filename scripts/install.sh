@@ -40,6 +40,8 @@ Usage: sudo bash scripts/install.sh [options]
   --with-opencode       also install the pinned OpenCode CLI (backend "opencode", ~350 MB) into <prefix>/opencode-cli
   --opencode-version V  OpenCode version to pin (default: $OPENCODE_VERSION_DEFAULT; implies --with-opencode)
   --opencode-bin PATH   use an existing OpenCode binary instead of installing one
+  --token-savers LIST   opt-in worker token savers, e.g. terse=lite,minimal_code=lite (docs/token-savings.md)
+  --rtk-bin PATH        enable the RTK shell-output saver with this existing rtk binary (not downloaded here)
   --systemd             also install and start a systemd service (only if systemd is running)
   --full-tests          run the whole test suite (a few minutes) instead of the unit tests
   --skip-tests          skip the test suite (health check and hello task still run)
@@ -61,6 +63,7 @@ SVC_USER="${SUDO_USER:-}"; PREFIX="/opt/$APP_NAME"; DATA_DIR=""; DATA_DIR_EXPLIC
 PROVIDER=nvidia; SECRET_STORE=""; NODE=""; KILO_VERSION="$KILO_VERSION_DEFAULT"; KILO_BIN_ARG=""
 SYSTEMD=0; FULL_TESTS=0; SKIP_TESTS=0; LIVE=1; RECONFIGURE=0
 WITH_OPENCODE=0; OPENCODE_VERSION="$OPENCODE_VERSION_DEFAULT"; OPENCODE_BIN_ARG=""
+TOKEN_SAVERS=""; RTK_BIN_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --user) SVC_USER="$2"; shift 2 ;;
@@ -75,6 +78,8 @@ while [ $# -gt 0 ]; do
     --with-opencode) WITH_OPENCODE=1; shift ;;
     --opencode-version) OPENCODE_VERSION="$2"; WITH_OPENCODE=1; shift 2 ;;
     --opencode-bin) OPENCODE_BIN_ARG="$2"; WITH_OPENCODE=1; shift 2 ;;
+    --token-savers) TOKEN_SAVERS="$2"; shift 2 ;;
+    --rtk-bin) RTK_BIN_ARG="$2"; shift 2 ;;
     --systemd) SYSTEMD=1; shift ;;
     --full-tests) FULL_TESTS=1; shift ;;
     --skip-tests) SKIP_TESTS=1; shift ;;
@@ -140,6 +145,26 @@ done
 ok "node deps installed (MCP SDK, zod; Kilo/OpenCode plugin SDKs for the guard plugin)"
 
 # ---------------------------------------------------------------------------------------------
+# Backend CLIs: when the requested version is the one pinned in scripts/pins/<name> (exact versions and
+# sha512 integrity of every package, verified by `npm ci`), install from that lockfile; otherwise fall
+# back to `npm install -g` of the exact top-level version (transitive packages then not integrity-pinned).
+pinned_install() { # <pin name> <npm package> <version> <target dir> <exe>
+  local pin="$SRC/scripts/pins/$1" pkg="$2" ver="$3" dir="$4" exe="$5"
+  if [ -f "$pin/package-lock.json" ] && [ "$("$NODE" -p "require('$pin/package.json').dependencies['$pkg']")" = "$ver" ]; then
+    rm -rf "$dir"; mkdir -p "$dir/bin"
+    cp "$pin/package.json" "$pin/package-lock.json" "$dir/"
+    (cd "$dir" && "$NPM" ci --no-audit --no-fund --loglevel=error >/dev/null) || return 1
+    # The link target comes from the package's own package.json "bin" field (not bin/<exe>).
+    local rel; rel="$("$NODE" "$SRC/scripts/pin-bin.mjs" "$dir" "$pkg" "$exe")" || return 1
+    ln -sfn "../node_modules/$pkg/$rel" "$dir/bin/$exe"
+    [ -e "$dir/bin/$exe" ] || { warn "$dir/bin/$exe -> ../node_modules/$pkg/$rel is a dangling link"; return 1; }
+    ok "installed $pkg@$ver into $dir from the committed lockfile (integrity-checked)"
+  else
+    "$NPM" install -g --prefix "$dir" "$pkg@$ver" --no-audit --no-fund --loglevel=error >/dev/null || return 1
+    warn "installed $pkg@$ver into $dir (no committed lockfile for this version: only the top-level version is pinned)"
+  fi
+}
+
 step "3/8 Kilo CLI $KILO_VERSION"
 kilo_version() { HOME="$(mktemp -d)" PATH="$NODE_DIR:/usr/bin:/bin" "$1" --version 2>/dev/null | tail -n1 | awk '{print $NF}'; }
 if [ -n "$KILO_BIN_ARG" ]; then
@@ -151,8 +176,7 @@ else
   if [ -x "$KILO_BIN" ] && [ "$(kilo_version "$KILO_BIN")" = "$KILO_VERSION" ]; then
     ok "already installed at $KILO_BIN"
   else
-    "$NPM" install -g --prefix "$PREFIX/kilo-cli" "@kilocode/cli@$KILO_VERSION" --no-audit --no-fund --loglevel=error >/dev/null || die "installing @kilocode/cli@$KILO_VERSION failed"
-    ok "installed @kilocode/cli@$KILO_VERSION into $PREFIX/kilo-cli"
+    pinned_install kilo-cli @kilocode/cli "$KILO_VERSION" "$PREFIX/kilo-cli" kilo || die "installing @kilocode/cli@$KILO_VERSION failed"
   fi
 fi
 GOT="$(kilo_version "$KILO_BIN")"
@@ -165,7 +189,7 @@ if [ "$WITH_OPENCODE" = 1 ]; then
   else
     OPENCODE_BIN="$PREFIX/opencode-cli/bin/opencode"
     if ! { [ -x "$OPENCODE_BIN" ] && [ "$(kilo_version "$OPENCODE_BIN")" = "$OPENCODE_VERSION" ]; }; then
-      "$NPM" install -g --prefix "$PREFIX/opencode-cli" "opencode-ai@$OPENCODE_VERSION" --no-audit --no-fund --loglevel=error >/dev/null || die "installing opencode-ai@$OPENCODE_VERSION failed"
+      pinned_install opencode-cli opencode-ai "$OPENCODE_VERSION" "$PREFIX/opencode-cli" opencode || die "installing opencode-ai@$OPENCODE_VERSION failed"
     fi
   fi
   OGOT="$(kilo_version "$OPENCODE_BIN")"
@@ -214,6 +238,25 @@ if [ ! -f "$CFG/repos.json" ]; then
   ok "repos.json created (allowlist: hello-world example)"
 else
   ok "repos.json kept (existing)"
+fi
+if [ -n "$TOKEN_SAVERS$RTK_BIN_ARG" ]; then
+  TS_ARGS=()
+  IFS=',' read -r -a TS_PAIRS <<< "$TOKEN_SAVERS"
+  for kv in "${TS_PAIRS[@]}"; do
+    [ -n "$kv" ] || continue
+    case "$kv" in
+      terse=*) TS_ARGS+=(--terse "${kv#terse=}") ;;
+      minimal_code=*|minimal-code=*) TS_ARGS+=(--minimal-code "${kv#*=}") ;;
+      rtk=*) TS_ARGS+=(--rtk "${kv#rtk=}") ;;
+      *) die "--token-savers: unknown entry '$kv' (use terse=, minimal_code=, rtk=)" ;;
+    esac
+  done
+  if [ -n "$RTK_BIN_ARG" ]; then
+    RTK_BIN_ARG="$(readlink -f "$RTK_BIN_ARG")"; [ -x "$RTK_BIN_ARG" ] || die "--rtk-bin $RTK_BIN_ARG is not executable"
+    TS_ARGS+=(--rtk on --rtk-bin "$RTK_BIN_ARG")
+  fi
+  WH_CONFIG_DIR="$CFG" "$NODE" "$PREFIX/bin/workhorse" token-savers "${TS_ARGS[@]}" >/dev/null || die "setting token savers failed"
+  ok "token savers: ${TOKEN_SAVERS:-} ${RTK_BIN_ARG:+rtk=$RTK_BIN_ARG}"
 fi
 DATA_DIR="$("$NODE" "$PREFIX/scripts/render-config.mjs" get "$CFG/daemon.json" data_dir)"
 cat > "$PREFIX/.install-info" <<INFO

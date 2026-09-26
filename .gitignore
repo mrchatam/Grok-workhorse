@@ -3,8 +3,8 @@ node_modules/
 config/*.json
 config/*.bak.*
 # pinned CLIs installed by scripts/install.sh when installing in place
-kilo-cli/
-opencode-cli/
+/kilo-cli/
+/opencode-cli/
 .install-info
 # test/runtime artifacts
 *.log

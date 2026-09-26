@@ -18,8 +18,17 @@
 // tool-output dir).
 // Used by the kilo and opencode backends as a plugin, and by the claude-code backend through
 // adapters/claude-code/pretooluse-guard.mjs (which maps Claude tool names onto these).
+// 3. Optional token saver (daemon.json token_savers.rtk): when WH_RTK_BIN is set, a bash command that
+//    passed the checks above is replaced by RTK's compact equivalent (`rtk rewrite`, e.g. `git status`
+//    -> `rtk git status`; https://github.com/rtk-ai/rtk, Apache-2.0, run as an external binary). The
+//    rewrite call gets a minimal environment (PATH, HOME, RTK_TELEMETRY_DISABLED=1; no API keys) and a
+//    1 s timeout; if it fails, times out, or its output does not pass the checks above, the original
+//    (already checked) command runs unchanged. It still runs inside the worker's outer sandbox, which
+//    has network access. Multi-line commands are left alone. Only the worker's own shell output is
+//    compacted; the daemon's test run never goes through this.
 // NOTE: Kilo/OpenCode call every export of this module as a plugin, so helpers must stay unexported.
 import path from "node:path"
+import { execFileSync } from "node:child_process"
 
 const STATIC_SECRET_VARS = [
   "NVIDIA_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "GH_TOKEN",
@@ -101,6 +110,33 @@ function checkBash(cmd, deny) {
   for (const p of denyPaths()) if (cmd.includes(p)) deny("access to the secret store or daemon token is not allowed")
 }
 
+function passesBashChecks(cmd) {
+  try {
+    checkBash(cmd, (why) => { throw new Error(why) })
+    return true
+  } catch {
+    return false
+  }
+}
+
+// `rtk rewrite <cmd>` prints the rewritten command and exits 0 (allowed) or 3 (rewritten; the host
+// decides permissions, which the checks here do); 1 = no RTK equivalent, 2 = deny rule.
+// The plugin hook has to return the final command, so this call is synchronous; it is bounded by a
+// short timeout and gets no secrets (minimal env).
+function rtkRewrite(bin, cmd) {
+  if (!bin || !path.isAbsolute(bin) || !cmd || cmd.length > 2000 || /[\n\r]/.test(cmd)) return null
+  const env = { PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin", HOME: process.env.HOME || "/nonexistent", RTK_TELEMETRY_DISABLED: "1" }
+  let out
+  try {
+    out = execFileSync(bin, ["rewrite", cmd], { encoding: "utf8", timeout: 1000, env, stdio: ["ignore", "pipe", "ignore"] })
+  } catch (e) {
+    if (e && e.status === 3 && typeof e.stdout === "string") out = e.stdout
+    else return null
+  }
+  const r = String(out || "").trim()
+  return r && r !== cmd && !/[\n\r]/.test(r) ? r : null
+}
+
 const FILE_TOOLS = new Set(["read", "write", "edit", "multiedit", "apply_patch", "patch", "glob", "grep", "list", "lsp"])
 const PATH_KEYS = ["filePath", "path", "file_path"]
 
@@ -123,6 +159,11 @@ export const WorkhorseGuard = async ({ directory, worktree }) => {
       if (input.tool === "bash") {
         checkBash(String(args.command ?? ""), deny)
         if (args.workdir && !inside(String(args.workdir))) deny("workdir outside the task worktree")
+        const rw = rtkRewrite(process.env.WH_RTK_BIN, typeof args.command === "string" ? args.command : "")
+        if (rw) {
+          // Use the rewrite only if it passes the same checks; otherwise keep the original command.
+          if (passesBashChecks(rw)) args.command = rw
+        }
         return
       }
       if (FILE_TOOLS.has(input.tool)) {

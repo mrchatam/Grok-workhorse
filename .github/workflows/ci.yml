@@ -24,7 +24,36 @@ jobs:
         run: for f in scripts/*.sh; do bash -n "$f"; done
       - name: Unit tests (no backend CLI, no network, live tests skipped)
         run: npm run test:unit
-      - name: Integration/live tests are skipped without a backend CLI
+      - name: Integration tests with the test-only stub backend (real daemon, scripted worker; git + python3)
+        run: npm run test:stub
+      - name: Remaining test files (Kilo/OpenCode integration + live tests skip without a backend CLI)
         env:
           WH_SKIP_INTEGRATION: "1"
-        run: node --test test/*.test.mjs
+          WH_SKIP_STUB: "1"
+        run: node --test --test-timeout=600000 test/*.test.mjs
+
+  pins:
+    name: Installer pins resolve to an existing binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: npm ci --ignore-scripts on each scripts/pins/* lockfile and check the install.sh link target
+        # scripts/pins/<name>-cli pins one package whose executable is <name> (kilo-cli -> kilo,
+        # opencode-cli -> opencode); the target comes from the package's package.json "bin" field,
+        # exactly as scripts/install.sh resolves it.
+        run: |
+          set -euo pipefail
+          for pin in scripts/pins/*/; do
+            name="$(basename "$pin")"; exe="${name%-cli}"
+            pkg="$(node -p "Object.keys(require('./${pin}package.json').dependencies)[0]")"
+            tmp="$(mktemp -d)"; cp "$pin/package.json" "$pin/package-lock.json" "$tmp/"
+            (cd "$tmp" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error)
+            rel="$(node scripts/pin-bin.mjs "$tmp" "$pkg" "$exe")"
+            mkdir -p "$tmp/bin" && ln -sfn "../node_modules/$pkg/$rel" "$tmp/bin/$exe"
+            test -e "$tmp/bin/$exe" || { echo "::error::$name: bin/$exe -> $rel is dangling"; exit 1; }
+            echo "$name: $pkg bin $exe -> node_modules/$pkg/$rel (exists)"
+          done

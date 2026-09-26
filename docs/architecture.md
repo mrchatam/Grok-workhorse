@@ -16,9 +16,9 @@ sequenceDiagram
   D->>D: normalize events: stats, activity log, audit
   W-->>D: exit
   D->>D: run tests in test sandbox, collect diff, integrity checks, verdict
-  S->>M: task_status / task_result / task_details
-  M->>D: RPC
-  D-->>S: structured result
+  S->>M: wait_task (long-poll, ≤55 s per call)
+  M->>D: RPC (held until the task settles or the wait ends)
+  D-->>S: brief result (task_result / task_details for more)
 ```
 
 ## Components
@@ -34,13 +34,19 @@ sequenceDiagram
 | `lib/git.mjs` | Clones (allowlisted hosts only), worktrees, diffs, main-clone fingerprint. |
 | `lib/config.mjs` | Config loading, defaults, auto-detection of backend binaries, bwrap and toolchain dirs. |
 | `lib/credentials.mjs` | Optional JSON secret-store fallback. |
-| `lib/audit.mjs` | Append-only JSONL audit log (values redacted). |
+| `lib/audit.mjs` | Append-only JSONL audit log (values redacted, rotated by size). |
+| `lib/views.mjs` | `brief` result view. |
+| `lib/usage.mjs` | `usage_report` / `workhorse stats`: per-run tokens by profile and day, supervisor ESTIMATE. |
+| `lib/savers.mjs` | Opt-in worker token savers (instruction fragments, RTK settings). |
+| `lib/operator.mjs` | Operator token for `approvals.require_operator` (hash check, token file). |
+| `adapters/stub/` | TEST-ONLY scripted backend for CI, registered only with `WH_ENABLE_STUB_BACKEND=1`. |
 | `adapters/` | One adapter per coding-agent CLI plus the shared helpers; see [adapters.md](adapters.md). |
 | `adapters/kilo/config/` | Kilo config shipped with the app: permissions, agents (`worker`, `review`, `explore`), guard plugin, worker contract (`AGENTS.md`), vendored skills. |
 
 ## Task lifecycle
 
-`queued` → `running` → (`retry_wait` → `queued` …) → `testing` → `finalizing` → one terminal state:
+`queued` → `running` → (`retry_wait` → `queued` …) → `testing` → `finalizing` → (automatic fix or
+escalation run → `queued` …) → (`reviewing` while an auto-review child runs) → one terminal state:
 `completed`, `failed`, `timeout`, `stalled`, `cancelled` or `interrupted`, or the parked state
 `needs_approval` when the worker asked for a human decision (see below).
 
@@ -75,6 +81,17 @@ completed/failed/... ──update_handoff state=needs_approval──▶ needs_ap
 
 Details, field reference and the verdict-to-handoff table: [handoff.md](handoff.md).
 
+## Automatic follow-ups (v0.3)
+
+At the end of `finalize`, `planAuto` decides whether the daemon itself queues another run instead of
+settling: a **fix** round (same session) when the verdict is in `auto.fix_on` and fix rounds remain,
+otherwise an **escalation** run on the profile's `escalate_to` (fresh session, same worktree) when the
+verdict is in `auto.escalate_on`. Caps: `max_auto_runs`, `max_tokens`, `max_cost_usd`. Each decision is
+appended to `t.auto_trail` and copied to `result.auto`. After a successful final run, `auto_review`
+starts a read-only review child task (`auto_review_of` = parent); the parent stays `reviewing` until
+the child finishes, then gets `result.review` and an updated handoff. Recovery after a restart finishes
+a parent whose review child already settled.
+
 ## Data layout (`data_dir`)
 
 ```
@@ -83,7 +100,7 @@ worktrees/<repo>/<id>/    one worktree per task (branch workhorse/<id>)
 tasks/<id>/               task.json (incl. result + handoff), activity.log, run-N.events.jsonl, run-N.stderr.log, diff.patch, test.log
 backend-data/<id>/        per-task agent data (session DB, snapshots, per-task settings)
 kilo-home/, opencode-home/  backend HOMEs (config/code dirs root-owned after lock-config)
-logs/                     daemon.log, audit.jsonl (one JSON object per line: ts, kind, then event fields)
+logs/                     daemon.log, audit.jsonl (+ audit.jsonl.1 … after rotation; one JSON object per line: ts, kind, then event fields)
 run/                      socket, token, pid files (0700)
 ```
 
@@ -95,7 +112,7 @@ carry `task_id`, `event` (`created`, `run_started`, `run_exited`, `finished`, `p
 `handoff_updated`, `approval`, `closed`, `cleanup`, …) and the task's `status`. Those fields are
 reserved: if event data uses one of them, the reserved value wins and the data value is kept as
 `data_<key>`. `run_started` records the run kind (`initial`, `continue`, `retry`, `fallback`) as
-`run_kind`.
+`run_kind` (also `auto_fix` and `escalate` since v0.3).
 
 ## Retries and fallback
 

@@ -36,10 +36,15 @@ after(async () => {
 
 H.itest("tools are exposed with schemas", async () => {
   const c = await mkClient()
-  const { tools } = await c.listTools()
-  assert.deepEqual(tools.map((t) => t.name).sort(), ["approve_task", "cancel_task", "cleanup_task", "continue_task", "delegate_task", "list_models", "list_repos", "list_tasks", "task_details", "task_result", "task_status", "update_handoff"])
-  for (const t of tools) assert.ok(t.description.length > 40, t.name)
-  await c.close()
+  try {
+    const { tools } = await c.listTools()
+    assert.deepEqual(tools.map((t) => t.name).sort(), ["approve_task", "cancel_task", "cleanup_task", "continue_task", "delegate_task", "delegate_tasks", "list_models", "list_repos", "list_tasks", "task_details", "task_result", "task_status", "update_handoff", "usage_report", "wait_task"])
+    for (const t of tools) assert.ok(t.description.length > 40, t.name)
+    const approve = tools.find((t) => t.name === "approve_task")
+    assert.ok(!("operator_token" in approve.inputSchema.properties), "the operator token is never an MCP parameter")
+  } finally {
+    await c.close()
+  }
 })
 
 H.itest("delegate via MCP, poll, result; two shims share one daemon", async () => {
@@ -50,12 +55,15 @@ H.itest("delegate via MCP, poll, result; two shims share one daemon", async () =
   const models = await call(b, "list_models")
   assert.ok(models.profiles.length >= 2)
   const r = await call(a, "delegate_task", { repo: H.REPO_NAME, task: "Implement multiply and divide in calc/core.py so tests/test_core.py passes. MOCK_SCENARIO=implement_core", test_command: "python3 -m unittest tests.test_core -v" })
-  let st
-  for (let i = 0; i < 600; i++) {
-    st = await call(b, "task_status", { task_id: r.task_id }) // other shim sees the same task
-    if (st.terminal) break
-    await H.sleep(1000)
+  let w
+  for (let i = 0; i < 20; i++) {
+    const raw = await b.callTool({ name: "wait_task", arguments: { task_id: r.task_id, max_wait_s: 30 } }) // other shim sees the same task
+    assert.ok(!raw.content[0].text.includes("\n  "), "compact JSON")
+    w = JSON.parse(raw.content[0].text)
+    if (w.done) break
   }
+  assert.equal(w.task.verdict, "success")
+  assert.equal(w.task.next.state, "done")
   const res = await call(a, "task_result", { task_id: r.task_id })
   assert.equal(res.verdict, "success", JSON.stringify(res, null, 1))
   assert.equal(res.integrity.commits_made, 0)

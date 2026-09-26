@@ -1,10 +1,12 @@
 # Grok Workhorse
 
+[![CI](https://github.com/mrchatam/Grok-workhorse/actions/workflows/ci.yml/badge.svg)](https://github.com/mrchatam/Grok-workhorse/actions/workflows/ci.yml)
+
 > Unofficial community project. Not affiliated with, endorsed by or sponsored by xAI.
 
 **Grok Workhorse lets a supervising AI agent (for example Grok Bot) hand coding tasks to sandboxed
 coding-agent workers on your own Linux machine.** The supervisor calls a small MCP interface
-(`delegate_task`, `task_status`, `task_result`, ...). A local daemon creates a fresh git worktree for
+(`delegate_task`, `wait_task`, `task_result`, ...). A local daemon creates a fresh git worktree for
 each task and runs a coding-agent CLI (Kilo CLI or OpenCode today, with more adapters on the way)
 inside a bubblewrap sandbox, using any OpenAI-compatible model you configure. The daemon then runs your
 tests itself and returns a short structured result plus the diff. Workers never commit, merge or push:
@@ -12,7 +14,12 @@ you (or your supervisor) review the branch and decide.
 
 - Repo: https://github.com/mrchatam/Grok-workhorse
 - License: MIT (vendored skills: MIT, see [NOTICE](NOTICE))
-- Status: v0.2.0 in development (latest release v0.1.0), Linux only
+- Status: v0.3.0 in development (latest release v0.1.0), Linux only
+
+**Why:** to reduce supervisor (for example Grok) usage. The expensive model plans and reviews; smaller
+models you choose do the bounded coding work, and v0.3 keeps what the supervisor reads and does per task
+small (one `wait_task` call, a ~0.5-1 KB brief result, automatic fix rounds and reviews on cheap
+models). See [docs/token-savings.md](docs/token-savings.md).
 
 ## Features
 
@@ -24,8 +31,32 @@ you (or your supervisor) review the branch and decide.
 - **Structured results**: verdict (`success`, `tests_failed`, `no_changes`, `blocked`, `integrity_violation`, ...), diffstat, daemon-run test results, the worker's self-report, concerns, token usage and timings. Raw logs are paged on demand.
 - **Follow-ups and reviews**: `continue_task` resumes the same session and worktree. `mode: "review"` runs a read-only reviewer on another task's diff.
 - **Handoff records and human approval**: every finished task says who acts next (`owner`), the one exact `next_action`, which checks failed, and how to resume. A worker that needs a human decision parks the task as `needs_approval` (worktree kept) until someone answers with `approve_task`. Supervisors record their own handoffs with `update_handoff`. See [docs/handoff.md](docs/handoff.md).
-- **Operations**: stall detection (15 min by default), wall-clock timeouts, cancel, recovery after a daemon restart, retention sweeps, an append-only JSONL audit log, and `workhorse health` for daily checks.
+- **Token savings (v0.3)**: `wait_task` long-poll (one call instead of a polling loop), compact JSON
+  and a `brief` result view, `delegate_tasks` batches, presets and size routing, automatic fix rounds and
+  cheap-to-strong escalation with hard caps, an optional cheap advisory review, `usage_report` /
+  `workhorse stats` with a labelled estimate of supervisor tokens avoided, and opt-in worker savers
+  (terse output, minimal-code bias, RTK for shell output). See [docs/token-savings.md](docs/token-savings.md).
+- **Operator-confirmed approvals** (optional): with `approvals.require_operator`, the supervisor's
+  approval only records a request and a human confirms that exact request on the host with a separate
+  operator token. It gates the parked-task flow; it is not a capability boundary (see
+  [docs/handoff.md](docs/handoff.md#operator-confirmation-approvalsrequire_operator-v03)).
+- **Operations**: stall detection (15 min by default, per profile with `stall_minutes`), wall-clock timeouts, cancel, recovery after a daemon restart, retention sweeps, an append-only JSONL audit log (rotated by size), and `workhorse health` for daily checks.
 - **Credentials from the environment first** (daemon env, or the MCP connector env passed through the shim), with an optional secret-store fallback. Keys never appear in argv, logs or results.
+
+## Measured savings
+
+All figures below are **estimates** from small samples on this repository; details, method and caveats
+are in [docs/token-savings.md](docs/token-savings.md#benchmarks).
+
+| What | Estimate | How it was measured |
+|---|---|---|
+| Supervisor tokens read per task, succeeds first time (v0.2 polling flow vs v0.3 `wait_task` + brief) | ~3,060 -> ~360 (about -88%) | test-only stub backend on the calc fixture; responses counted with the `o200k_base` tokenizer as a proxy; assumes 5 status polls in the v0.2 flow |
+| Same, tests fail once then fixed (v0.2 manual `continue_task` vs v0.3 `auto_fix_rounds: 1`) | ~6,900 -> ~400 (about -94%) | same method; the fix round costs worker tokens on the cheap profile instead |
+| RTK on worker shell output (8 common commands) | about -35% overall (0% to -76% per command) | RTK v0.50.0 on this repository, `o200k_base` token counts of each command's output before/after the rewrite |
+| Worker output with `terse` + `minimal_code` (`lite`) | about -10% output tokens | 3 A/B pairs on one real model through Kilo, provider-reported tokens; not statistically meaningful |
+
+`workhorse stats` / `usage_report` give a conservative running ESTIMATE for your own tasks (formula in
+the same doc).
 
 ## Architecture
 
@@ -86,7 +117,7 @@ The installer is idempotent, so you can re-run it to upgrade. It copies the app 
 (root-owned), pins the Kilo CLI, checks bubblewrap, writes and locks the config, creates a hello-world
 repo, installs the `workhorse` and `workhorse-mcp` commands, runs the tests, and finishes with a live
 hello task if the key is available. Useful options: `--with-opencode`, `--systemd`,
-`--secret-store PATH`, `--prefix`, `--data-dir`, `--full-tests`. Run `bash scripts/install.sh --help`
+`--secret-store PATH`, `--prefix`, `--data-dir`, `--full-tests`, `--token-savers LIST` / `--rtk-bin PATH` (opt-in worker token savers). Run `bash scripts/install.sh --help`
 for the full list.
 
 Then:
@@ -114,9 +145,9 @@ Config lives in `<prefix>/config/` and is root-owned once locked. To edit it, ru
 
 | File | What it holds |
 |---|---|
-| `profiles.json` | providers (OpenAI-compatible `base_url` plus the *name* of the env var holding the key), models, profiles (`backend`, `model`, `fallback` list), `default_profile` |
+| `profiles.json` | providers (OpenAI-compatible `base_url` plus the *name* of the env var holding the key), models, profiles (`backend`, `model`, `fallback` list, `escalate_to`, `stall_minutes`, `token_savers`), `default_profile`, `presets`, size `routing`, `auto` follow-ups |
 | `repos.json` | repo allowlist: local `path` or clone `url`, default branch, default/allowed test commands, `test_network`, `trust_project_config` |
-| `daemon.json` | concurrency, timeouts (stall 15 min), retries, retention, backends (`bin`, pinned version), sandbox binds/env, `secret_store_path`, allowed clone hosts |
+| `daemon.json` | concurrency, timeouts (stall 15 min), retries, retention, backends (`bin`, pinned version), sandbox binds/env, `secret_store_path`, allowed clone hosts, `token_savers`, `approvals`, `audit` rotation, `supervisor` estimate inputs |
 
 A profile that runs Kilo on NVIDIA and falls back to OpenCode on OpenRouter:
 
@@ -137,7 +168,8 @@ A profile that runs Kilo on NVIDIA and falls back to OpenCode on OpenRouter:
 ```
 
 The complete reference is in [docs/configuration.md](docs/configuration.md). Ready-made examples are in
-[config/examples/](config/examples/).
+[config/examples/](config/examples/); `profiles.tiered.json` shows a cheap -> mid -> strong setup with
+presets, size routing and automatic follow-ups.
 
 **Credentials.** The daemon looks up each provider's `api_key_env` in this order: its own environment,
 the env the MCP shim was started with (offered to the daemon in memory only), and finally the optional
@@ -166,9 +198,10 @@ tests only. See [docs/adapters.md](docs/adapters.md) for the adapter interface a
 
 - **getting-started**: walks a new user through choosing a provider and model, adding repos, storing
   the key securely, running the installer, registering the stdio connector and running the first task.
-- **delegation**: how a supervisor should delegate. It reads `list_models` and `list_repos`, writes
-  self-contained task descriptions, polls, reviews the result and diff, follows `handoff.next_action`,
-  uses `continue_task` for fixes, relays approvals, and merges or cleans up.
+- **delegation**: how a supervisor should delegate cheaply. It reads `list_models` and `list_repos`,
+  picks a preset or size, writes self-contained task descriptions, waits with `wait_task`, reviews the
+  brief result (and the diff when needed), follows `next` / `handoff.next_action`, uses automatic fix
+  rounds or `continue_task` for fixes, relays approvals, and merges or cleans up.
 
 Copy them into your Grok Bot skills if you want them. Nothing in this repo installs them automatically.
 
@@ -181,7 +214,11 @@ workhorse backends                      adapters: status, installed, capabilitie
 workhorse tasks | logs | audit          recent tasks, daemon log, audit log
 workhorse attention                     tasks that need someone (parked or handoff not done)
 workhorse handoff <id> [--owner O --next "..." --note "..." --state S]   show or update a handoff
-workhorse approve <id> | reject <id>    answer a parked (needs_approval) task
+workhorse approve <id> | reject <id>    answer a parked (needs_approval) task (sends the operator token if required)
+workhorse wait <id>... [--all] [--max S] [--full]   long-poll until tasks finish or park
+workhorse stats [--days N] [--profile P] [--json]   worker usage by profile/day + supervisor ESTIMATE
+workhorse token-savers [...] | off      show or set opt-in worker token savers
+workhorse operator-token init [--enable]   create the operator token for require_operator
 workhorse cleanup-old [--days N]        retention sweep now
 workhorse repos | add-repo | remove-repo | validate | check-provider | hello
 ```
@@ -191,6 +228,7 @@ workhorse repos | add-repo | remove-repo | validate | check-provider | hello
 ```bash
 npm run setup          # npm ci for the app and the backend config dirs
 npm run test:unit      # fast, no CLI or network needed (runs in CI)
+npm run test:stub      # end-to-end flows with the test-only stub backend: git + python3 only (runs in CI)
 npm test               # full suite: needs the Kilo CLI, bwrap, git, python3 (mock LLM), ~10 min
 WH_TEST_BACKEND=opencode WH_OPENCODE_BIN=$(command -v opencode) npm test   # same suite on OpenCode
 WH_LIVE_TEST=1 NVIDIA_API_KEY=... npm run test:live                        # one real task
@@ -228,4 +266,6 @@ or host.
 
 The worker skills in `adapters/kilo/config/skills/` are vendored (unmodified, some files removed) from
 [obra/superpowers](https://github.com/obra/superpowers) (MIT, Jesse Vincent). Kilo CLI and OpenCode are
-projects of their respective authors. See [NOTICE](NOTICE).
+projects of their respective authors. The `terse` and `minimal_code` token-saver fragments are our own
+wording, inspired by Caveman and Ponytail (both MIT); the optional RTK integration calls the separately
+installed RTK binary (Apache-2.0). See [NOTICE](NOTICE).

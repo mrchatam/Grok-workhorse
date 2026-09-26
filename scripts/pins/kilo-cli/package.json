@@ -1,0 +1,8 @@
+{
+  "name": "workhorse-pin-kilo-cli",
+  "private": true,
+  "description": "Integrity-pinned Kilo CLI for scripts/install.sh (npm ci). Regenerate: npm install --package-lock-only",
+  "dependencies": {
+    "@kilocode/cli": "7.8.1"
+  }
+}

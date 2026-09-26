@@ -53,6 +53,17 @@ test("OpenRouter example swaps provider and uses a fallback list", () => {
   assert.deepEqual(C.validateConfig(), [])
 })
 
+test("tiered example (v0.3): escalation chain, routing, presets and auto settings validate", () => {
+  fs.copyFileSync(path.join(APP, "config/examples/profiles.tiered.json"), path.join(cfgDir, "profiles.json"))
+  const pc = C.profilesConfig()
+  assert.deepEqual(C.validateConfig(), [])
+  assert.deepEqual(pc.routing, { small: "cheap", medium: "mid", large: "strong" })
+  assert.equal(pc.profiles.cheap.escalate_to, "mid")
+  assert.equal(pc.presets["quick-fix"].auto_fix_rounds, 1)
+  assert.equal(pc.auto.max_auto_runs, 3)
+  assert.equal(pc.auto.review.profile, "cheap")
+})
+
 test("validateConfig reports undefined models, providers and fallbacks; string fallback accepted", () => {
   fs.writeFileSync(path.join(cfgDir, "profiles.json"), JSON.stringify({
     default_profile: "missing",

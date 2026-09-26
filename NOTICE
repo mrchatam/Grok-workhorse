@@ -13,7 +13,20 @@ This product includes third-party material:
    adapters/kilo/config/skills/SUPERPOWERS-LICENSE. Files are unmodified except that
    skill-authoring fixtures were removed (see adapters/kilo/config/skills/SOURCES.md).
 
+Ideas credited (no code or text copied; our own wording, see docs/token-savings.md):
+
+2. The `terse` worker-instruction fragment (lib/savers.mjs) is inspired by Caveman,
+   https://github.com/JuliusBrussee/caveman (MIT License, (c) 2026 Julius Brussee, except its
+   engine-linked directories such as engine/ and proxy/, which are under BSL-1.1 and are not used).
+3. The `minimal_code` worker-instruction fragment (lib/savers.mjs) is inspired by Ponytail,
+   https://github.com/DietrichGebert/ponytail (MIT License, (c) 2026 DietrichGebert), and by its
+   adaptation in 9router, https://github.com/decolua/9router (MIT License, (c) 2024-2026 decolua and contributors).
+4. The optional RTK integration calls the RTK binary, https://github.com/rtk-ai/rtk (Apache License
+   2.0), which is not bundled and must be installed separately. The guard-plugin code that calls
+   `rtk rewrite` is our own.
+
 Not included, installed separately at install time (each under its own license):
   - Kilo CLI (@kilocode/cli) and @kilocode/plugin, by Kilo Code
   - OpenCode (opencode-ai) and @opencode-ai/plugin, by the OpenCode authors (optional)
   - @modelcontextprotocol/sdk and zod (npm dependencies)
+  - RTK (rtk), optional, only when token_savers.rtk is enabled
