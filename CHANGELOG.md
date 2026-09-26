@@ -6,6 +6,53 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - Unreleased
+
+Task handoff records and a human-approval state, based on community feedback. A supervisor should keep a
+blocked task as blocked, with the failed check, the owner and the exact next action, so a later agent
+can resume it without guessing.
+
+### Added
+- **Handoff record** on every finished task (`task.handoff`, persisted in `task.json`): `state` (`done`,
+  `needs_fix`, `needs_review`, `needs_approval`, `needs_input`, `blocked`, `retryable`, `closed`),
+  `failed_checks` (tests with command, exit code, failing test names and an excerpt; integrity; blocked
+  tool calls; timeout, stall or interrupt; worker error; missing `## RESULT`; no changes), `owner`,
+  `next_action`, `resume` (suggested tool + args, session reusable, worktree, branch), `context`,
+  `notes`, `history`, `updated_at` / `updated_by`. The daemon derives it deterministically from the
+  verdict and the data it already has. `task_result` returns it in full, and `task_status` and
+  `list_tasks` return a summary. Tasks finished before 0.2.0 get a derived record on the fly.
+- **Parked status `needs_approval`**: the task waits for a human decision when the worker reports
+  `status: needs_approval` / `needs_input`, or `blocked` with a request or after blocked tool calls.
+  No worker runs. `task_status` reports `terminal: true, parked: true`. The worktree is kept by retention
+  unless `retention.parked_days` is set, and even then the task record is never purged automatically.
+- MCP tools `update_handoff` (owner, next_action, state, note; state `needs_approval` / `needs_input`
+  parks a task and any other state unparks it) and `approve_task` (`approve` resumes through the
+  continue path with the approval noted, and `reject` closes the task or redirects it with
+  instructions).
+- `list_tasks` filters `status: "needs_attention"` (parked tasks plus finished tasks whose handoff is
+  not done or closed) and `status: "parked"`, and a new `owner` filter.
+- CLI: `workhorse handoff <id>` (show or update), `workhorse approve <id>`, `workhorse reject <id>`,
+  `workhorse attention`, `workhorse tasks --status/--owner`, `workhorse cleanup-old --parked-days N`.
+- Worker contract: RESULT statuses `needs_approval` and `needs_input`, plus an optional `needs:` line
+  for the one exact request.
+- `test_results.failing_tests` (names parsed from the full test log) when tests fail.
+- `health_report`: `parked_tasks`, `oldest_parked_days`, `needs_attention`.
+- Audit events `parked`, `handoff_updated`, `approval`, `closed`. `finished` now carries
+  `handoff_state` and `owner`.
+- Docs: [docs/handoff.md](docs/handoff.md). The delegation skill draft now tells the supervisor to follow
+  `handoff.next_action`, relay approvals and hand off with `update_handoff`.
+
+### Changed
+- `continue_task` also accepts parked (`needs_approval`) tasks. Each `previous_results` entry records
+  the handoff it replaced, and the approval that answered it.
+- `cancel_task` on a parked task closes it (status `cancelled`, handoff `closed`).
+- `list_tasks status: "terminal"` also includes parked tasks, since no worker is running.
+
+### Compatibility
+- Existing statuses, verdicts and tool arguments are unchanged. A parked task's verdict is the existing
+  `blocked`. Tasks that used to end as `completed` + `blocked` are now `needs_approval` + `blocked` when
+  the worker made a concrete request or hit blocked tool calls. Without either, they stay `completed`.
+
 ## [0.1.0] - 2026-09-26
 
 First public release.
@@ -34,4 +81,5 @@ First public release.
 - Draft Grok Bot skills in `grok-template/` (getting started, delegation).
 
 [Unreleased]: https://github.com/mrchatam/Grok-workhorse/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/mrchatam/Grok-workhorse/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/mrchatam/Grok-workhorse/releases/tag/v0.1.0
