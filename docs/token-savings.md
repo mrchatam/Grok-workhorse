@@ -59,7 +59,7 @@ Budget details:
   its automatic review tasks.
 - They are checked between runs, so a single run can overshoot them; the next automatic run is then
   not started.
-- `0` means an explicit zero budget (no automatic follow-ups at all), not "unlimited". Leave the key
+- `0` means an explicit zero budget (no automatic follow-ups or reviews at all), not "unlimited". Leave the key
   out (or `null`) for no budget.
 - `continue_task` starts a new automatic round: the trail and the fix-round / `max_auto_runs`
   counters restart, but the token and cost budgets keep counting the whole task.

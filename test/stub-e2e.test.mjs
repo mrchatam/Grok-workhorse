@@ -344,6 +344,40 @@ stest("usage_report: tokens by profile/day and a labelled supervisor ESTIMATE", 
   assert.deepEqual(one.by_profile.map((p) => p.profile).sort(), ["mid", "strong"].filter((x) => one.by_profile.some((p) => p.profile === x)).sort())
 })
 
+stest("restart recovery: a review whose parent link was lost is re-linked; an orphan review is cancelled", async () => {
+  const d1 = await delegate({ task: task("review"), auto_review: "reviewer" })
+  const d2 = await delegate({ task: task("review"), auto_review: "reviewer" })
+  const r1 = await waitDone(d1.task_id)
+  const r2 = await waitDone(d2.task_id)
+  const c1 = r1.review.task_id
+  const c2 = r2.review.task_id
+  await stopDaemon(daemon)
+  const file = (id) => path.join(env.dataDir, "tasks", id, "task.json")
+  const edit = (id, fn) => { const j = JSON.parse(fs.readFileSync(file(id), "utf8")); fn(j); fs.writeFileSync(file(id), JSON.stringify(j)) }
+  let childCreated
+  edit(c1, (j) => { childCreated = j.created_at })
+  // Crash after the review child was saved but before the parent recorded its id.
+  edit(d1.task_id, (j) => {
+    j.status = "reviewing"
+    j.review_pending = { profile: "reviewer", final_status: "completed", started_at: new Date(Date.parse(childCreated) - 1000).toISOString() }
+    delete j.result.review
+    delete j.auto_review_usage
+  })
+  // A review child that never ran while its parent already finished.
+  edit(c2, (j) => { j.status = "queued"; j.result = null; j.handoff = null; j.finished_at = null })
+  daemon = await startDaemon(env, DAEMON_ENV)
+  const p1 = await rpc("task_result", { task_id: d1.task_id })
+  assert.equal(p1.status, "completed")
+  assert.equal(p1.review.task_id, c1)
+  assert.equal(p1.review.verdict, "request_changes")
+  let st
+  for (let i = 0; i < 50 && (st = await rpc("task_status", { task_id: c2 })).status !== "cancelled"; i++) await sleep(100)
+  assert.equal(st.status, "cancelled")
+  assert.equal((await rpc("task_status", { task_id: d2.task_id })).status, "completed")
+  const audit = fs.readFileSync(path.join(env.dataDir, "logs/audit.jsonl"), "utf8")
+  assert.match(audit, /orphan_auto_review_cancelled/)
+})
+
 stest("restart: a killed daemon leaves an interrupted, retryable task that resumes", async () => {
   const d = await delegate({ task: task("slow") })
   for (let i = 0; i < 50 && (await rpc("task_status", { task_id: d.task_id })).status !== "running"; i++) await sleep(100)

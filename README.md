@@ -1,5 +1,7 @@
 # Grok Workhorse
 
+[![CI](https://github.com/mrchatam/Grok-workhorse/actions/workflows/ci.yml/badge.svg)](https://github.com/mrchatam/Grok-workhorse/actions/workflows/ci.yml)
+
 > Unofficial community project. Not affiliated with, endorsed by or sponsored by xAI.
 
 **Grok Workhorse lets a supervising AI agent (for example Grok Bot) hand coding tasks to sandboxed
@@ -35,9 +37,26 @@ models). See [docs/token-savings.md](docs/token-savings.md).
   `workhorse stats` with a labelled estimate of supervisor tokens avoided, and opt-in worker savers
   (terse output, minimal-code bias, RTK for shell output). See [docs/token-savings.md](docs/token-savings.md).
 - **Operator-confirmed approvals** (optional): with `approvals.require_operator`, the supervisor's
-  approval only records a request and a human confirms it on the host with a separate operator token.
+  approval only records a request and a human confirms that exact request on the host with a separate
+  operator token. It gates the parked-task flow; it is not a capability boundary (see
+  [docs/handoff.md](docs/handoff.md#operator-confirmation-approvalsrequire_operator-v03)).
 - **Operations**: stall detection (15 min by default, per profile with `stall_minutes`), wall-clock timeouts, cancel, recovery after a daemon restart, retention sweeps, an append-only JSONL audit log (rotated by size), and `workhorse health` for daily checks.
 - **Credentials from the environment first** (daemon env, or the MCP connector env passed through the shim), with an optional secret-store fallback. Keys never appear in argv, logs or results.
+
+## Measured savings
+
+All figures below are **estimates** from small samples on this repository; details, method and caveats
+are in [docs/token-savings.md](docs/token-savings.md#benchmarks).
+
+| What | Estimate | How it was measured |
+|---|---|---|
+| Supervisor tokens read per task, succeeds first time (v0.2 polling flow vs v0.3 `wait_task` + brief) | ~3,060 -> ~360 (about -88%) | test-only stub backend on the calc fixture; responses counted with the `o200k_base` tokenizer as a proxy; assumes 5 status polls in the v0.2 flow |
+| Same, tests fail once then fixed (v0.2 manual `continue_task` vs v0.3 `auto_fix_rounds: 1`) | ~6,900 -> ~400 (about -94%) | same method; the fix round costs worker tokens on the cheap profile instead |
+| RTK on worker shell output (8 common commands) | about -35% overall (0% to -76% per command) | RTK v0.50.0 on this repository, `o200k_base` token counts of each command's output before/after the rewrite |
+| Worker output with `terse` + `minimal_code` (`lite`) | about -10% output tokens | 3 A/B pairs on one real model through Kilo, provider-reported tokens; not statistically meaningful |
+
+`workhorse stats` / `usage_report` give a conservative running ESTIMATE for your own tasks (formula in
+the same doc).
 
 ## Architecture
 

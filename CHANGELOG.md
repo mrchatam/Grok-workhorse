@@ -26,21 +26,35 @@ act, and adds opt-in savers for the workers. Builds on 0.2.0. See [docs/token-sa
 - **Automatic follow-ups** (off by default; per call, per preset or `profiles.json` `auto`):
   `auto_fix_rounds` (same-session fix rounds after failing tests or a missing/partial RESULT, max 3),
   `escalate` along each profile's new `escalate_to` chain (fresh session, same worktree), hard caps
-  `max_auto_runs` (default 3, cap 6), `max_tokens`, `max_cost_usd`. The trail is in `result.auto`.
+  `max_auto_runs` (default 3, cap 6, total per round), `max_tokens`, `max_cost_usd` (both include the
+  task's auto-review tasks; `0` = explicit zero budget (no follow-ups or reviews), not unlimited; checked between runs, so one run
+  can overshoot). `continue_task` restarts the run counters but not the token/cost budgets. The trail
+  is in `result.auto`.
 - **`auto_review`**: an advisory read-only review on a (cheap) profile after a successful run; new
-  transient status `reviewing`. `request_changes` makes the handoff `needs_review`.
+  transient status `reviewing`. `request_changes` makes the handoff `needs_review`. The verdict is read
+  from the first line of the reviewer's summary (negations such as "not approved" count as
+  `request_changes`; anything else is `unclear`). Review tasks are hidden from `list_tasks` unless
+  `include_auto_reviews` is set and never need attention themselves; the daemon recovers or cancels an
+  orphaned review after a crash.
 - **`usage_report`** (MCP, RPC) and **`workhorse stats`**: worker tokens and estimated list cost by
-  profile and day, plus a clearly labelled ESTIMATE of supervisor tokens avoided (formula documented;
-  optional `daemon.json supervisor.price_per_mtok` for USD). The daemon now records per-run tokens and
+  profile and day, plus a clearly labelled, conservative ESTIMATE of supervisor tokens avoided (only
+  successful workers' output tokens minus the supervisor's own I/O; worker input is not counted;
+  formula documented; optional `daemon.json supervisor.price_per_mtok` for a net USD figure). The daemon now records per-run tokens and
   cost, and the characters each supervisor call sent and received.
 - **Worker token savers** (`token_savers` in daemon.json, per-profile override; all off by default):
   `terse` and `minimal_code` instruction fragments (`lite`/`full`, our own wording inspired by Caveman
   and Ponytail) and `rtk` (Kilo/OpenCode: the guard plugin rewrites worker bash commands through
-  `rtk rewrite`). `workhorse token-savers`, installer `--token-savers` / `--rtk-bin`. The daemon's own
-  test run never goes through them.
-- **`approvals.require_operator`**: MCP `approve_task` only records an approval request; a human
-  confirms with `sudo workhorse approve <id>`, which sends a separate operator token (the daemon stores
-  its SHA-256). `workhorse operator-token init [--enable]`.
+  `rtk rewrite`, with a minimal environment and a 1 s timeout, falling back to the original command
+  if the rewrite fails or does not pass the guard; only the rtk binary itself is bound into the
+  sandbox). `workhorse token-savers`, installer `--token-savers` / `--rtk-bin`. The daemon's own test
+  run never goes through them.
+- **`approvals.require_operator`**: MCP `approve_task` only records an approval request (with a
+  request id); a human confirms with `sudo workhorse approve <id>`, which prints the pending request
+  and sends a separate operator token (the daemon stores its SHA-256) plus the displayed request id
+  (refused if the request changed). A task that parked stays gated until the operator answers, even if
+  it is closed or cancelled meanwhile; without the token, reject may only close the task. This gates
+  the parked-task flow; it is not a capability boundary (a supervisor can still delegate a new task
+  asking for the same thing). `workhorse operator-token init [--enable]`.
 - **Per-profile `stall_minutes`.**
 - **Audit log rotation** (`audit.max_mb`, `audit.keep`).
 - **Test-only stub backend** (`adapters/stub`), registered only when the daemon runs with
@@ -50,14 +64,20 @@ act, and adds opt-in savers for the workers. Builds on 0.2.0. See [docs/token-sa
 
 ### Changed
 - The MCP shim returns compact JSON (9-18% fewer characters on typical responses).
-- The full `task_result` no longer repeats top-level fields inside `handoff.context` (`get_handoff`
-  still returns the complete record).
+- The full `task_result` view is unchanged from 0.2.0 apart from compact JSON (the complete handoff,
+  including `handoff.context`, is kept for compatibility; use `view: "brief"` for the short form).
 - `delegate_task`'s `next_step` and the MCP instructions point to `wait_task`; the delegation skill draft
   prefers `wait_task`, the brief view, presets/size, batches and automatic follow-ups.
 - The installer installs Kilo CLI and OpenCode from committed lockfiles (`scripts/pins/`, `npm ci`,
   integrity-checked) when the pinned version is requested, and falls back to `npm install -g` with a
   warning otherwise.
-- CI runs the unit tests, then the stub end-to-end suite.
+- The installer resolves the pinned CLI's executable from the package's own `package.json` `bin` field
+  (opencode-ai 1.18.32 ships `bin/opencode.exe`, which left a dangling link before) and fails if the
+  link target is missing.
+- CI runs the unit tests, then the stub end-to-end suite, and a job that installs every
+  `scripts/pins/*` lockfile with `npm ci --ignore-scripts` and checks the link target exists.
+- This branch is rebased onto the 0.2.0 review fixes (restart socket race, closed-on-parked semantics,
+  approval source).
 
 ## [0.2.0] - Unreleased
 

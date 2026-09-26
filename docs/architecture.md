@@ -35,7 +35,7 @@ sequenceDiagram
 | `lib/config.mjs` | Config loading, defaults, auto-detection of backend binaries, bwrap and toolchain dirs. |
 | `lib/credentials.mjs` | Optional JSON secret-store fallback. |
 | `lib/audit.mjs` | Append-only JSONL audit log (values redacted, rotated by size). |
-| `lib/views.mjs` | `brief` result view and handoff deduplication for the full view. |
+| `lib/views.mjs` | `brief` result view. |
 | `lib/usage.mjs` | `usage_report` / `workhorse stats`: per-run tokens by profile and day, supervisor ESTIMATE. |
 | `lib/savers.mjs` | Opt-in worker token savers (instruction fragments, RTK settings). |
 | `lib/operator.mjs` | Operator token for `approvals.require_operator` (hash check, token file). |

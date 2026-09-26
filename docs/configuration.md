@@ -82,7 +82,7 @@ the routine follow-up work on cheap models.
   escalations together), plus optional `max_tokens` (input+output+reasoning of all runs, including the
   task's automatic review tasks) and `max_cost_usd` (needs `price_per_mtok`; also includes the reviews).
   The first cap reached stops the chain; the result records `auto.stopped_reason`. Budgets are checked
-  between runs, so one run can overshoot them. `0` is an explicit zero budget (no automatic follow-ups);
+  between runs, so one run can overshoot them. `0` is an explicit zero budget (no automatic follow-ups or reviews);
   omit the key or use `null` for no budget; negative or non-numeric values fail `workhorse validate`.
   `continue_task` restarts the trail and the run counters for its new round, but not the token/cost
   budgets.
