@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest an improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How could Grok Workhorse help? Include MCP/API or config sketches if relevant.
+  - type: textarea
+    id: security
+    attributes:
+      label: Security impact
+      description: Does this widen what a worker can reach (network, paths, credentials)? How is that contained?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

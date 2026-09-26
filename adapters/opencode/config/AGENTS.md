@@ -1,0 +1,1 @@
+../../kilo/config/AGENTS.md

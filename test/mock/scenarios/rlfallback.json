@@ -1,0 +1,14 @@
+{
+ "steps": [
+  {
+   "status": 429,
+   "times": 1000,
+   "only_models": [
+    "mock/coder"
+   ]
+  },
+  {
+   "text": "## RESULT\nstatus: done\nsummary: finished on fallback model\nfiles_changed: none\ntests: none\nconcerns: none"
+  }
+ ]
+}

@@ -1,0 +1,55 @@
+{
+  "name": "grok-workhorse",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sandboxed coding-agent workers (Kilo CLI, OpenCode, ...) that a supervising AI agent drives over MCP, with any OpenAI-compatible model provider",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "coding-agent",
+    "sandbox",
+    "bubblewrap",
+    "kilo-code",
+    "opencode",
+    "grok"
+  ],
+  "homepage": "https://github.com/mrchatam/Grok-workhorse#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mrchatam/Grok-workhorse.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mrchatam/Grok-workhorse/issues"
+  },
+  "scripts": {
+    "setup": "npm ci && npm ci --prefix adapters/kilo/config && npm ci --prefix adapters/opencode/config",
+    "test": "node --test --test-timeout=600000 test/*.test.mjs",
+    "test:unit": "node --test test/unit.test.mjs test/config.test.mjs test/adapters.test.mjs",
+    "test:live": "WH_LIVE_TEST=1 node --test --test-timeout=1800000 test/live.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "zod": "^3.25.76"
+  },
+  "license": "MIT",
+  "bin": {
+    "workhorse": "bin/workhorse",
+    "workhorse-mcp": "bin/workhorse-mcp"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "adapters",
+    "config/examples",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ]
+}

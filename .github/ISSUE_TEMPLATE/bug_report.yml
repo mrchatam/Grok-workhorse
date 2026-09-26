@@ -1,0 +1,47 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems (sandbox escape, credential leak): please use private vulnerability reporting instead (see SECURITY.md).
+        Never paste API keys, tokens or private repo content.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. workhorse ... 2. delegate_task {...} 3. ..."
+  - type: textarea
+    id: health
+    attributes:
+      label: "`workhorse health` output"
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: "workhorse version, or git rev-parse --short HEAD"
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options: [kilo, opencode, claude-code, codex, other]
+  - type: input
+    id: env
+    attributes:
+      label: OS / kernel / Node
+      placeholder: "Ubuntu 24.04, 6.8, Node 22.19"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (redacted)
+      description: task_details kind=activity or stderr, daemon.log excerpt
+      render: text

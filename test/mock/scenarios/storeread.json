@@ -1,0 +1,7 @@
+{
+ "steps": [
+  { "tool_calls": [ { "name": "bash", "arguments": { "command": "cat /tmp/kwt-store-*/wh-test-secret-store.json", "description": "read store" } } ] },
+  { "tool_calls": [ { "name": "bash", "arguments": { "command": "echo fakekey_count=$(env | grep -c fake-store-value)", "description": "env" } } ] },
+  { "text": "## RESULT\nstatus: done\nsummary: store probe\nfiles_changed: none\ntests: none\nconcerns: none" }
+ ]
+}

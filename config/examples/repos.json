@@ -1,0 +1,14 @@
+{
+  "_comment": "Repo allowlist. Key = the name delegate_task uses. Either 'path' (an existing local clone) or 'url' (https/ssh git URL on a host in daemon.json allowed_clone_hosts; the daemon clones it into <data_dir>/repos/<name>). allowed_test_commands are anchored regexes; keep them narrow. Prefer `sudo workhorse add-repo` over editing by hand.",
+  "repos": {
+    "hello-world": {
+      "description": "Tiny example repo created by the installer for smoke tests (workhorse hello). Safe to remove.",
+      "path": "__DATA_DIR__/repos/hello-world",
+      "default_base": "main",
+      "test_command": "node --test",
+      "allowed_test_commands": ["^node --test$"],
+      "test_network": false,
+      "trust_project_config": false
+    }
+  }
+}

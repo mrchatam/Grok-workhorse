@@ -1,0 +1,19 @@
+Grok Workhorse
+Copyright (c) 2026 mrchatam and Grok Workhorse contributors. Licensed under the MIT License (see LICENSE).
+
+Unofficial community project. Not affiliated with, endorsed by or sponsored by xAI. "Grok" is used
+only to describe compatibility with Grok Bot's MCP connectors.
+
+This product includes third-party material:
+
+1. Superpowers skills (adapters/kilo/config/skills/: test-driven-development, systematic-debugging,
+   verification-before-completion)
+   Source: https://github.com/obra/superpowers, commit 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+   Copyright (c) 2025 Jesse Vincent. MIT License; full text in
+   adapters/kilo/config/skills/SUPERPOWERS-LICENSE. Files are unmodified except that
+   skill-authoring fixtures were removed (see adapters/kilo/config/skills/SOURCES.md).
+
+Not included, installed separately at install time (each under its own license):
+  - Kilo CLI (@kilocode/cli) and @kilocode/plugin, by Kilo Code
+  - OpenCode (opencode-ai) and @opencode-ai/plugin, by the OpenCode authors (optional)
+  - @modelcontextprotocol/sdk and zod (npm dependencies)

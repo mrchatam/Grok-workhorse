@@ -1,0 +1,32 @@
+name: Adapter request
+description: Ask for (or offer) support for another coding-agent CLI
+labels: [adapter]
+body:
+  - type: input
+    id: cli
+    attributes:
+      label: CLI and link
+      placeholder: "e.g. Gemini CLI, https://..."
+    validations:
+      required: true
+  - type: textarea
+    id: headless
+    attributes:
+      label: Headless mode
+      description: How is it run non-interactively? Structured output (JSON / stream-json)? Session resume?
+  - type: textarea
+    id: guard
+    attributes:
+      label: Hooks / permissions
+      description: Pre-tool hooks or plugin API, permission modes, own sandbox?
+  - type: textarea
+    id: providers
+    attributes:
+      label: Model providers
+      description: Can it use an OpenAI-compatible base URL (needed for the mock integration suite)?
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contribution
+      options:
+        - label: I can help implement or test this adapter

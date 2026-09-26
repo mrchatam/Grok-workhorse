@@ -1,0 +1,23 @@
+{
+  "_comment": "Template for any OpenAI-compatible endpoint (vLLM, LiteLLM, Together, Groq, a local Ollama at http://127.0.0.1:11434/v1 with api_key_env null, ...). Replace every <...>.",
+  "default_profile": "default",
+  "profiles": {
+    "default": {
+      "description": "<what this model is good for>",
+      "model": "custom/<model-key>",
+      "fallback": []
+    }
+  },
+  "providers": {
+    "custom": {
+      "name": "<display name>",
+      "base_url": "https://<host>/v1",
+      "api_key_env": "<ENV_VAR_NAME_HOLDING_THE_KEY>",
+      "max_concurrent": 1,
+      "models": {
+        "<model-key>": { "id": "<model id as the API expects it>", "context": 131072, "output": 16384, "reasoning": false }
+      }
+    }
+  },
+  "kilo_overlay": {}
+}

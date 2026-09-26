@@ -1,0 +1,220 @@
+#!/usr/bin/env node
+// workhorse: operator CLI for Grok Workhorse. Run `workhorse help`.
+import fs from "node:fs"
+import path from "node:path"
+import { execFileSync } from "node:child_process"
+import { rpc, ensureDaemon, startSupervisor } from "../lib/client.mjs"
+import { dirs, SOCKET_PATH, CONFIG_DIR, DATA_DIR, VERSION, validateConfig } from "../lib/config.mjs"
+
+const USAGE = `workhorse ${VERSION} - operator CLI for Grok Workhorse
+
+Service:
+  start | stop | restart          start/stop the supervisor + daemon (runs as the invoking user)
+  status                          quick daemon status (exit 1 if not running)
+  health [--json]                 full check for a daily cron/agent run (exit 1 on any FAIL)
+  logs [N] | audit [N]            tail daemon.log / audit.jsonl
+  tasks [N]                       recent tasks
+  cleanup-old [--days N] [--task-days N] [--dry-run]
+                                  remove finished worktrees older than N days (default: daemon.json retention)
+Config (the config dir is root-owned once locked: use sudo for these):
+  repos                           show the allowlist
+  add-repo <git-url|path> [--name N] [--test "<cmd>"] [--allow-test "<regex>"]... [--base BRANCH]
+           [--description TEXT] [--test-network] [--fetch] [--force]
+  remove-repo <name>
+  validate                        static config check
+  backends [--json]               worker backends (coding-agent CLIs): status, installed, capabilities
+Checks:
+  check-provider [profile...]     one tool-calling request per profile (default + fallbacks); prints status only
+  hello [--repo NAME] [--profile P] [--keep]
+                                  end-to-end smoke test: delegate a tiny task, wait, print the verdict
+  call <method> '<json>'          raw daemon RPC
+Paths: config=${CONFIG_DIR} data=${DATA_DIR}`
+
+const argv = process.argv.slice(2)
+const cmd = argv[0] || "help"
+const rest = argv.slice(1)
+const out = (o) => console.log(typeof o === "string" ? o : JSON.stringify(o, null, 2))
+const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+function flags(args, spec) {
+  const o = { _: [] }
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (!a.startsWith("--")) { o._.push(a); continue }
+    const k = a.slice(2)
+    if (spec[k] === "bool") o[k] = true
+    else if (spec[k] === "list") (o[k] ||= []).push(args[++i])
+    else if (spec[k] === "str") o[k] = args[++i]
+    else throw new Error(`unknown option --${k}`)
+    if (spec[k] !== "bool" && o[k] === undefined) throw new Error(`--${k} needs a value`)
+  }
+  return o
+}
+const pidOf = (f) => {
+  try {
+    return Number(fs.readFileSync(path.join(dirs.run, f), "utf8")) || null
+  } catch {
+    return null
+  }
+}
+function refuseRoot() {
+  if (process.getuid?.() === 0 && !process.env.WH_ALLOW_ROOT) {
+    console.error("workhorse: refusing to run the daemon as root. Run this as the service user (the one the installer set up).")
+    process.exit(2)
+  }
+}
+async function stop() {
+  const sup = pidOf("supervisor.pid")
+  fs.mkdirSync(dirs.run, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(dirs.run, "stop"), "")
+  if (sup) try { process.kill(sup, "SIGTERM") } catch {}
+  for (let i = 0; i < 60 && fs.existsSync(SOCKET_PATH); i++) await wait(500)
+  out("stopped")
+}
+
+try {
+  switch (cmd) {
+    case "start":
+      refuseRoot()
+      out(await ensureDaemon())
+      break
+    case "stop":
+      await stop()
+      break
+    case "restart":
+      refuseRoot()
+      await stop()
+      try { fs.unlinkSync(path.join(dirs.run, "stop")) } catch {}
+      startSupervisor()
+      out(await ensureDaemon())
+      break
+    case "status":
+      try {
+        out({ supervisor_pid: pidOf("supervisor.pid"), ...(await rpc("health", {}, { timeoutMs: 3000 })) })
+      } catch (e) {
+        out({ running: false, error: e.message })
+        process.exitCode = 1
+      }
+      break
+    case "health": {
+      const f = flags(rest, { json: "bool", "no-start": "bool" })
+      const { healthChecks } = await import("../lib/admin.mjs")
+      let report = null
+      let err = null
+      try {
+        if (!f["no-start"] && process.getuid?.() !== 0) await ensureDaemon()
+        report = await rpc("health_report", {}, { timeoutMs: 10000 })
+      } catch (e) {
+        err = e.message
+      }
+      const checks = healthChecks(report, err)
+      const healthy = !checks.some((c) => c.status === "fail")
+      if (f.json) out({ healthy, checks, report })
+      else {
+        for (const c of checks) console.log(`${c.status.toUpperCase().padEnd(5)} ${c.name.padEnd(Math.max(13, ...checks.map((x) => x.name.length)))} ${c.detail}`)
+        console.log(healthy ? "HEALTHY" : "UNHEALTHY")
+      }
+      process.exitCode = healthy ? 0 : 1
+      break
+    }
+    case "logs":
+      out(execFileSync("tail", ["-n", rest[0] || "50", path.join(dirs.logs, "daemon.log")]).toString())
+      break
+    case "audit":
+      out(execFileSync("tail", ["-n", rest[0] || "20", path.join(dirs.logs, "audit.jsonl")]).toString())
+      break
+    case "tasks":
+      out(await rpc("list_tasks", { limit: Number(rest[0]) || 20 }))
+      break
+    case "cleanup-old": {
+      const f = flags(rest, { days: "str", "task-days": "str", "dry-run": "bool" })
+      out(await rpc("cleanup_old", {
+        ...(f.days !== undefined ? { worktree_days: Number(f.days) } : {}),
+        ...(f["task-days"] !== undefined ? { task_days: Number(f["task-days"]) } : {}),
+        dry_run: !!f["dry-run"],
+      }, { caller: { client: "workhorse" }, timeoutMs: 600000 }))
+      break
+    }
+    case "repos": {
+      const { reposConfig } = await import("../lib/config.mjs")
+      out([...reposConfig().values()].map((r) => ({ name: r.name, source: r.url || r.path, default_base: r.default_base, test_command: r.test_command, allowed_test_commands: r.allowed_test_commands_src })))
+      break
+    }
+    case "add-repo": {
+      const f = flags(rest, { name: "str", test: "str", "allow-test": "list", base: "str", description: "str", "test-network": "bool", fetch: "bool", force: "bool" })
+      const { addRepo } = await import("../lib/admin.mjs")
+      out(addRepo(f._[0], { name: f.name, test: f.test, allowTest: f["allow-test"], base: f.base, description: f.description, testNetwork: f["test-network"], fetch: f.fetch, force: f.force }))
+      break
+    }
+    case "remove-repo": {
+      const { removeRepo } = await import("../lib/admin.mjs")
+      if (!rest[0]) throw new Error("usage: workhorse remove-repo <name>")
+      out(removeRepo(rest[0]))
+      break
+    }
+    case "validate": {
+      const p = validateConfig()
+      out(p.length ? { ok: false, problems: p } : { ok: true })
+      process.exitCode = p.length ? 1 : 0
+      break
+    }
+    case "check-provider": {
+      const { checkProvider } = await import("../lib/admin.mjs")
+      const r = await checkProvider(rest)
+      out(r)
+      process.exitCode = r.every((x) => x.ok !== false) ? 0 : 1
+      break
+    }
+    case "backends": {
+      const { daemonConfig } = await import("../lib/config.mjs")
+      const { backendSummary } = await import("../adapters/index.mjs")
+      const cfg = daemonConfig()
+      const list = backendSummary(cfg)
+      if (rest.includes("--json")) out(list)
+      else {
+        for (const b of list) console.log(`${b.name.padEnd(12)} ${b.status.padEnd(9)} ${b.installed ? "installed" : "-".padEnd(9)}  ${b.summary}${b.name === cfg.default_backend ? "  [default]" : ""}`)
+      }
+      break
+    }
+    case "hello": {
+      refuseRoot()
+      const f = flags(rest, { repo: "str", profile: "str", keep: "bool", timeout: "str" })
+      const { HELLO_TASK } = await import("../lib/admin.mjs")
+      await ensureDaemon()
+      const repo = f.repo || "hello-world"
+      const r = await rpc("delegate_task", { repo, task: HELLO_TASK, ...(f.profile ? { profile: f.profile } : {}), timeout_minutes: Number(f.timeout) || 15 }, { caller: { client: "workhorse hello" } })
+      console.error(`delegated ${r.task_id} to profile ${r.profile} (${r.backend}, ${r.model}); waiting...`)
+      let st
+      const t0 = Date.now()
+      let lastPhase = ""
+      while (true) {
+        st = await rpc("task_status", { task_id: r.task_id })
+        if (st.phase !== lastPhase) { console.error(`  [${Math.round((Date.now() - t0) / 1000)}s] ${st.status}: ${st.phase}`); lastPhase = st.phase }
+        if (st.terminal) break
+        await wait(5000)
+      }
+      const res = await rpc("task_result", { task_id: r.task_id })
+      out({ task_id: r.task_id, verdict: res.verdict, profile: res.profile, backend: res.backend, worker_model: res.worker_model, files_changed: res.files_changed.map((x) => x.path), tests_passed: res.test_results?.passed ?? null, seconds: res.timings?.total_s, concerns: res.remaining_concerns, errors: res.errors })
+      if (!f.keep) await rpc("cleanup_task", { task_id: r.task_id, discard_unmerged_changes: true }).catch(() => {})
+      process.exitCode = res.verdict === "success" ? 0 : 1
+      break
+    }
+    case "call":
+      out(await rpc(rest[0], rest[1] ? JSON.parse(rest[1]) : {}, { caller: { client: "workhorse" } }))
+      break
+    case "version":
+    case "--version":
+      out(VERSION)
+      break
+    case "help":
+    case "--help":
+    case "-h":
+      out(USAGE)
+      break
+    default:
+      out(USAGE)
+      process.exitCode = 2
+  }
+} catch (e) {
+  console.error(`workhorse ${cmd}: ${e.message}`)
+  process.exitCode = 1
+}

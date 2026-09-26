@@ -1,0 +1,29 @@
+{
+  "_comment": "Same schema as profiles.nvidia.json, routed through OpenRouter. Model ids: https://openrouter.ai/models (pick models with reliable tool calling).",
+  "default_profile": "default",
+  "profiles": {
+    "default": {
+      "description": "Nemotron 3 Ultra via OpenRouter; falls back to Qwen3 Coder after repeated rate-limit/server errors.",
+      "model": "openrouter/nemotron-ultra",
+      "fallback": ["qwen-coder"]
+    },
+    "qwen-coder": {
+      "description": "Qwen3 Coder via OpenRouter.",
+      "model": "openrouter/qwen3-coder",
+      "fallback": []
+    }
+  },
+  "providers": {
+    "openrouter": {
+      "name": "OpenRouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "max_concurrent": 2,
+      "models": {
+        "nemotron-ultra": { "id": "nvidia/nemotron-3-ultra-550b-a55b", "context": 131072, "output": 16384, "reasoning": true },
+        "qwen3-coder": { "id": "qwen/qwen3-coder", "context": 131072, "output": 16384 }
+      }
+    }
+  },
+  "kilo_overlay": {}
+}

@@ -1,0 +1,18 @@
+{
+ "steps": [
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "echo canary_count=$(env | grep -ci canary); echo nonempty: $(env | awk -F= 'length($2)>0 {print $1}' | sort | tr '\\n' ' ')",
+      "description": "env"
+     }
+    }
+   ]
+  },
+  {
+   "text": "## RESULT\nstatus: done\nsummary: env checked\nfiles_changed: none\ntests: none\nconcerns: none"
+  }
+ ]
+}

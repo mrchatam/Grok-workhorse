@@ -1,0 +1,53 @@
+{
+  "default_profile": "mock",
+  "profiles": {
+    "mock": {
+      "description": "scripted mock LLM",
+      "model": "mock/coder",
+      "fallback": ["mock2"],
+      "price_per_mtok": { "input": 1, "output": 2 }
+    },
+    "mock2": {
+      "description": "second mock profile (fallback target)",
+      "model": "mock/coder2",
+      "explore_model": "mock/coder"
+    },
+    "needskey": {
+      "description": "requires a missing credential",
+      "model": "keyed/coder"
+    },
+    "off": {
+      "enabled": false,
+      "disabled_reason": "test",
+      "model": "mock/coder"
+    },
+    "needsoffer": {
+      "description": "mock model behind a credential offered by the shim",
+      "model": "offered/coder"
+    }
+  },
+  "providers": {
+    "mock": {
+      "name": "Mock",
+      "base_url": "http://127.0.0.1:__MOCK_PORT__/v1",
+      "api_key_env": null,
+      "max_concurrent": 2,
+      "models": {
+        "coder": { "id": "mock/coder", "name": "Mock coder", "context": 131072, "output": 8192, "temperature": false, "options": { "chat_template_kwargs": { "enable_thinking": false, "force_nonempty_content": true } } },
+        "coder2": { "id": "mock/coder2", "name": "Mock coder 2", "context": 131072, "output": 8192, "temperature": false }
+      }
+    },
+    "keyed": {
+      "base_url": "http://127.0.0.1:__MOCK_PORT__/v1",
+      "api_key_env": "WH_TEST_MISSING_KEY",
+      "models": { "coder": { "id": "mock/coder", "context": 131072, "output": 8192 } }
+    },
+    "offered": {
+      "base_url": "http://127.0.0.1:__MOCK_PORT__/v1",
+      "api_key_env": "WH_TEST_OFFER_KEY",
+      "max_concurrent": 1,
+      "models": { "coder": { "id": "mock/coder", "context": 131072, "output": 8192 } }
+    }
+  },
+  "kilo_overlay": {}
+}

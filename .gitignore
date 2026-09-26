@@ -1,0 +1,12 @@
+node_modules/
+# installed/local config (examples are tracked)
+config/*.json
+config/*.bak.*
+# pinned CLIs installed by scripts/install.sh when installing in place
+kilo-cli/
+opencode-cli/
+.install-info
+# test/runtime artifacts
+*.log
+coverage/
+.DS_Store

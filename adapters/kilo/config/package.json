@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "dependencies": {
+    "@kilocode/plugin": "7.8.1"
+  }
+}

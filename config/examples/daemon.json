@@ -1,0 +1,27 @@
+{
+  "_comment": "Daemon settings. Every key is optional (defaults in lib/config.mjs). The installer fills __...__ placeholders. Which backend a task uses is chosen per profile in profiles.json (\"backend\"), defaulting to default_backend.",
+  "data_dir": "__DATA_DIR__",
+  "max_concurrent": 2,
+  "timeouts": { "default_min": 30, "min_min": 1, "max_min": 120, "stall_min": 15, "test_min": 10, "kill_grace_sec": 10 },
+  "retry": { "max_retries": 2, "backoff_sec": [30, 120], "provider_cooldown_sec": 60 },
+  "retention": { "enabled": true, "worktree_days": 7, "task_days": 30, "sweep_interval_min": 60 },
+  "default_backend": "kilo",
+  "bwrap": "__BWRAP__",
+  "backends": {
+    "kilo": { "bin": "__KILO_BIN__", "expected_version": "__KILO_VERSION__" },
+    "opencode": { "bin": null, "expected_version": null }
+  },
+  "env_path": "__ENV_PATH__",
+  "secret_env": [],
+  "secret_store_path": null,
+  "allowed_clone_hosts": ["github.com"],
+  "min_mem_available_mb": 1200,
+  "sandbox_env": {},
+  "test_sandbox": { "enabled": true, "ro_binds": [] },
+  "worker_sandbox": {
+    "enabled": true,
+    "hide": ["/home", "/root", "/workspace", "/tmp", "/run", "/var/tmp", "/mnt", "/media", "/srv"],
+    "ro_binds": [],
+    "auto_bind_toolchain": true
+  }
+}

@@ -1,0 +1,88 @@
+// workhorse: dedicated global Kilo config for delegated worker runs.
+// Loaded ONLY by workhorse (KILO_CONFIG_DIR=<install>/adapters/kilo/config, HOME=<data_dir>/kilo-home).
+// Providers, models and the per-task model choice are NOT defined here: the daemon generates them from
+// config/profiles.json and injects them via KILO_CONFIG_CONTENT, together with the allow rule for
+// Kilo's own tool-output dir under external_directory.
+// Every permission resolves to allow or deny (never "ask"): headless runs must not block on approvals.
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "default_agent": "worker",
+  "autoupdate": false,
+  "share": "disabled",
+  "experimental": { "openTelemetry": false },
+  // Compaction triggers at declared limit.context minus "reserved" (e.g. 131072 - 20000 tokens).
+  "compaction": { "auto": true, "prune": true, "reserved": 20000 },
+  // OS sandbox (bubblewrap + seccomp): writes only inside the worktree (+ Kilo data dirs),
+  // .git metadata read-only, no outbound network from model-run commands, private PID namespace.
+  // Kilo's temp dir /tmp/kilo (per-task tmpfs from the daemon's outer sandbox) is writable, so
+  // daemon.json sandbox_env can point build caches there (e.g. GOCACHE=/tmp/kilo/go-build).
+  "sandbox": { "enabled": true, "network": "deny" },
+  "permission": {
+    "*": "deny",
+    "read": { "*": "allow", "*.env": "deny", "*.env.*": "deny", "*.pem": "deny", "*.key": "deny", "*id_rsa*": "deny", "*id_ed25519*": "deny" },
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "lsp": "allow",
+    "edit": { "*": "allow", ".git/*": "deny", "*/.git/*": "deny", ".kilo/*": "deny", ".kilocode/*": "deny", "kilo.json": "deny", "kilo.jsonc": "deny", "opencode.json": "deny", "opencode.jsonc": "deny" },
+    "todowrite": "allow",
+    "todoread": "allow",
+    "skill": "allow",
+    "task": { "*": "deny", "explore": "allow" },
+    "external_directory": { "*": "deny" },
+    "webfetch": "deny",
+    "websearch": "deny",
+    "question": "deny",
+    "doom_loop": "deny",
+    "bash": {
+      "*": "allow",
+      "git commit*": "deny", "git push*": "deny", "git reset*": "deny", "git checkout*": "deny",
+      "git switch*": "deny", "git rebase*": "deny", "git merge*": "deny", "git remote*": "deny",
+      "git fetch*": "deny", "git pull*": "deny", "git clone*": "deny", "git config*": "deny",
+      "git tag*": "deny", "git branch*": "deny", "git stash*": "deny", "git worktree*": "deny",
+      "git update-ref*": "deny", "git cherry-pick*": "deny", "git revert*": "deny", "git am*": "deny",
+      "git clean*": "deny", "git gc*": "deny", "git filter-branch*": "deny", "git submodule*": "deny",
+      "git checkout -- *": "allow", "git restore *": "allow", "git branch --show-current": "allow",
+      "gh *": "deny", "curl *": "deny", "wget *": "deny", "ssh *": "deny", "scp *": "deny",
+      "rsync *": "deny", "nc *": "deny", "ncat *": "deny", "telnet *": "deny", "sudo *": "deny",
+      "su *": "deny", "docker *": "deny", "kilo *": "deny", "npm publish*": "deny",
+      "*git commit*": "deny", "*git push*": "deny", "*environ*": "deny"
+    }
+  },
+  "agent": {
+    "worker": {
+      "description": "Delegated implementation worker: implements, tests and debugs one task inside its git worktree. Never commits.",
+      "mode": "primary",
+      "steps": 80
+    },
+    "review": {
+      "description": "Read-only reviewer: inspects a diff or branch and reports findings. Must not modify files.",
+      "mode": "primary",
+      "steps": 40,
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "deny",
+          "git diff*": "allow", "git log*": "allow", "git show*": "allow", "git status*": "allow",
+          "git merge-base*": "allow", "git rev-parse*": "allow",
+          "ls*": "allow", "cat *": "allow", "head *": "allow", "tail *": "allow", "wc *": "allow",
+          "rg *": "allow", "grep *": "allow",
+          "python3 -m unittest*": "allow", "python3 -m pytest*": "allow", "pytest*": "allow",
+          "npm test*": "allow", "npm run test*": "allow", "node --test*": "allow",
+          "go test*": "allow", "go vet*": "allow", "gofmt -l*": "allow", "cargo test*": "allow"
+        }
+      }
+    },
+    "explore": {
+      "description": "Fast read-only codebase explorer (cheap model). Use it to locate files/symbols in large repos before editing.",
+      "mode": "subagent",
+      "steps": 25,
+      "permission": {
+        "edit": "deny",
+        "task": "deny",
+        "bash": { "*": "deny", "ls*": "allow", "git log*": "allow", "git diff*": "allow", "git show*": "allow", "rg *": "allow", "wc *": "allow" }
+      }
+    },
+    "general": { "disable": true }
+  }
+}

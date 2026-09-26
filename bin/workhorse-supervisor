@@ -1,0 +1,35 @@
+#!/bin/bash
+# workhorse-supervisor: keeps workhorsed running without needing systemd/cron (works in containers
+# whose PID 1 is a tiny init). Restarts the daemon with exponential backoff; exits when $RUN/stop exists.
+# Single instance via flock. Started automatically by the MCP shim / `workhorse start`, or by a service unit.
+set -u
+APP="${WH_APP_DIR:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+if [ -z "${WH_DATA_DIR:-}" ]; then
+  WH_DATA_DIR="$(node -e 'import(process.argv[1]).then((c) => console.log(c.DATA_DIR))' "$APP/lib/config.mjs")"
+fi
+export WH_DATA_DIR
+DATA="$WH_DATA_DIR"
+RUN="$DATA/run"; LOG="$DATA/logs"
+mkdir -p "$RUN" "$LOG"; chmod 700 "$RUN"
+exec 9>"$RUN/supervisor.lock"
+flock -n 9 || exit 0
+echo $$ > "$RUN/supervisor.pid"
+rm -f "$RUN/stop"
+backoff=1
+child=""
+trap 'touch "$RUN/stop"; [ -n "$child" ] && kill -TERM "$child" 2>/dev/null; wait "$child" 2>/dev/null; exit 0' TERM INT
+while [ ! -e "$RUN/stop" ]; do
+  # rotate daemon log at 10 MB
+  if [ -f "$LOG/daemon.log" ] && [ "$(stat -c %s "$LOG/daemon.log")" -gt 10485760 ]; then mv -f "$LOG/daemon.log" "$LOG/daemon.log.1"; fi
+  start=$(date +%s)
+  echo "[$(date -Is)] supervisor: starting workhorsed" >> "$LOG/daemon.log"
+  node "$APP/bin/workhorsed" >> "$LOG/daemon.log" 2>&1 &
+  child=$!
+  wait "$child"; rc=$?
+  child=""
+  echo "[$(date -Is)] supervisor: workhorsed exited rc=$rc" >> "$LOG/daemon.log"
+  [ -e "$RUN/stop" ] && break
+  if [ $(( $(date +%s) - start )) -gt 60 ]; then backoff=1; else backoff=$(( backoff * 2 > 30 ? 30 : backoff * 2 )); fi
+  sleep "$backoff"
+done
+rm -f "$RUN/supervisor.pid"

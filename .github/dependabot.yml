@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  # Root app dependencies only. adapters/*/config pin plugin packages to the backend CLI version
+  # they were tested with; bump those together with the pinned CLI in scripts/install.sh.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5

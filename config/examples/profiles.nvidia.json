@@ -1,0 +1,54 @@
+{
+  "_comment": "Model routing. providers = OpenAI-compatible endpoints (base_url + the NAME of the env var holding the key; never the key itself). profiles = what delegate_task can pick; model is '<provider key>/<model key>'. fallback = other profiles tried in order after repeated 429/5xx errors (empty = no fallback). Optional per-profile \"backend\" (kilo, opencode, ...; default: daemon.json default_backend). The daemon generates each backend's provider config from this file.",
+  "default_profile": "default",
+  "profiles": {
+    "default": {
+      "description": "NVIDIA Nemotron 3 Ultra 550B-A55B with reasoning. Normal and hard work: implement/fix/test, debugging, refactors, reviews.",
+      "model": "nvidia/nemotron-ultra",
+      "fallback": [],
+      "price_per_mtok": { "input": 0.5, "output": 2.5 },
+      "price_note": "Estimate only; check your provider's current pricing."
+    },
+    "super": {
+      "description": "NVIDIA Nemotron 3 Super 120B-A12B with reasoning. Optional cheaper alternative; add \"super\" to default.fallback to use it as a fallback.",
+      "model": "nvidia/nemotron-super",
+      "fallback": []
+    }
+  },
+  "providers": {
+    "nvidia": {
+      "name": "NVIDIA NIM (build.nvidia.com)",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key_env": "NVIDIA_API_KEY",
+      "max_concurrent": 2,
+      "timeout_ms": 600000,
+      "models": {
+        "nemotron-ultra": {
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "name": "Nemotron 3 Ultra (thinking)",
+          "context": 131072,
+          "output": 16384,
+          "reasoning": true,
+          "options": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "chat_template_kwargs": { "enable_thinking": true, "force_nonempty_content": true }
+          }
+        },
+        "nemotron-super": {
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "name": "Nemotron 3 Super (thinking)",
+          "context": 131072,
+          "output": 16384,
+          "reasoning": true,
+          "options": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "chat_template_kwargs": { "enable_thinking": true, "force_nonempty_content": true }
+          }
+        }
+      }
+    }
+  },
+  "kilo_overlay": {}
+}

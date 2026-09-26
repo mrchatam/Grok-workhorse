@@ -1,0 +1,18 @@
+{
+ "steps": [
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "sleep 8; echo slept",
+      "description": "slow"
+     }
+    }
+   ]
+  },
+  {
+   "text": "## RESULT\nstatus: done\nsummary: slow done\nfiles_changed: none\ntests: none\nconcerns: none"
+  }
+ ]
+}

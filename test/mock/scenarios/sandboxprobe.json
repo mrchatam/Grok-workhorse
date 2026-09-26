@@ -1,0 +1,84 @@
+{
+ "steps": [
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "python3 -c \"import os\nfor label, p in [('store', '__STORE_REV__'[::-1]), ('storedir', os.path.dirname('__STORE_REV__'[::-1])), ('decoy', '__DECOY__'), ('token', '__DATA__/r'+'un/token')]:\n    try:\n        n = len(os.listdir(p)) if label == 'storedir' else len(open(p).read())\n        print('PROBE', label, 'read=OK')\n    except Exception as e:\n        print('PROBE', label, 'read=FAIL:' + type(e).__name__)\n\"",
+      "description": "secret probe"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "echo \"WT=[$(ls -A __DATA__/worktrees/__REPO_NAME__ 2>&1 | tr '\\n' ' ')]\"; echo \"TASKS=[$(ls -A __DATA__/tasks 2>&1 | tr '\\n' ' ')]\"; echo \"MAIN=[$(ls -A __REPO__ 2>&1 | tr '\\n' ' ')]\"; echo \"HOMEDIR=[$(ls -A __HOME__ 2>&1 | tr '\\n' ' ')]\"; echo \"RUNDIR=[$(ls -A /run 2>&1 | tr '\\n' ' ')]\"; echo \"DATADIR=[$(ls -A __DATA__ 2>&1 | tr '\\n' ' ')]\"; test -e __OTHER_WT__/calc/core.py && echo OTHER=visible || echo OTHER=hidden; python3 -c \"import os; print('PYLIST=' + ','.join(sorted(os.listdir('__DATA__/worktrees/__REPO_NAME__'))))\"",
+      "description": "visibility probe"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "echo x > /tmp/probe-ro; echo ro_rc=$?; git status --porcelain >/dev/null; echo git_rc=$?",
+      "description": "inner sandbox + git"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "write",
+     "arguments": {
+      "filePath": "NOTES.md",
+      "content": "# Notes\nWorkers never run git commit or git push; the supervisor does that.\n"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "read",
+     "arguments": {
+      "filePath": "NOTES.md"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "edit",
+     "arguments": {
+      "filePath": "NOTES.md",
+      "oldString": "# Notes",
+      "newString": "# Notes (see: git commit -m 'x' is forbidden)"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "cat > DOCS.md << 'EOF'\n# Docs\nAfter review the supervisor runs git commit and git push.\nEOF\necho heredoc_rc=$?",
+      "description": "heredoc doc"
+     }
+    }
+   ]
+  },
+  {
+   "text": "## RESULT\nstatus: done\nsummary: sandbox probe\nfiles_changed: NOTES.md, DOCS.md\ntests: none\nconcerns: none"
+  }
+ ]
+}

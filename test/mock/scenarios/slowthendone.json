@@ -1,0 +1,18 @@
+{
+ "steps": [
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "echo partial > partial.txt; sleep 25; echo slept",
+      "description": "slow"
+     }
+    }
+   ]
+  },
+  {
+   "text": "## RESULT\nstatus: done\nsummary: resumed and finished\nfiles_changed: partial.txt\ntests: none\nconcerns: none"
+  }
+ ]
+}

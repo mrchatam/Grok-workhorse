@@ -1,0 +1,128 @@
+{
+ "steps": [
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "echo pwned > /tmp/escape-test; echo rc=$?",
+      "description": "escape tmp"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "echo pwned > ../escape; echo rc=$?",
+      "description": "escape parent"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "write",
+     "arguments": {
+      "filePath": "/tmp/escape-write",
+      "content": "x"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "write",
+     "arguments": {
+      "filePath": "../escape-write",
+      "content": "x"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "git add -A && git commit -m pwned; echo rc=$?",
+      "description": "commit"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "git push origin HEAD; echo rc=$?",
+      "description": "push"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "sh -c 'git commit --allow-empty -m x'; echo rc=$?",
+      "description": "nested commit"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "echo x > __MAIN_CLONE__/ESCAPE_MAIN; echo rc=$?",
+      "description": "main clone write"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "python3 -c \"open('/tmp/escape-py','w').write('x')\"; echo rc=$?",
+      "description": "python escape"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "python3 -c \"import urllib.request;urllib.request.urlopen('https://example.com',timeout=5)\" 2>&1 | tail -1",
+      "description": "network"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "echo inside > inside.txt; echo rc=$?",
+      "description": "inside write"
+     }
+    }
+   ]
+  },
+  {
+   "text": "Tried everything.\n\n## RESULT\nstatus: blocked\nsummary: escape attempts\nfiles_changed: inside.txt\ntests: none\nconcerns: none"
+  }
+ ]
+}

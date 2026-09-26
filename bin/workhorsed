@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+// workhorse daemon entry point (normally run by bin/workhorse-supervisor).
+import { startDaemon } from "../lib/daemon.mjs"
+if (process.getuid?.() === 0 && !process.env.WH_ALLOW_ROOT) {
+  console.error("workhorsed: refusing to run as root; run it as the unprivileged service user")
+  process.exit(2)
+}
+startDaemon().catch((e) => {
+  console.error(`workhorsed failed to start: ${e.stack || e}`)
+  process.exit(1)
+})

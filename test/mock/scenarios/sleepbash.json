@@ -1,0 +1,18 @@
+{
+ "steps": [
+  {
+   "tool_calls": [
+    {
+     "name": "bash",
+     "arguments": {
+      "command": "sleep 60; echo slept",
+      "description": "long"
+     }
+    }
+   ]
+  },
+  {
+   "text": "done"
+  }
+ ]
+}

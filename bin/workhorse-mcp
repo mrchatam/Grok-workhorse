@@ -1,0 +1,131 @@
+#!/usr/bin/env node
+// workhorse stdio MCP shim. Stateless: every tool call is forwarded to the persistent daemon over
+// its authenticated unix socket. Safe to spawn once per supervisor agent.
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { z } from "zod"
+import { rpc, ensureDaemon } from "../lib/client.mjs"
+import { daemonConfig, secretEnvNames, VERSION } from "../lib/config.mjs"
+
+const caller = { shim_pid: process.pid, ppid: process.ppid, client: process.env.WH_CALLER || null }
+const server = new McpServer({ name: "grok-workhorse", version: VERSION }, {
+  instructions:
+    "Delegate coding tasks to a sandboxed coding-agent worker (Kilo CLI, OpenCode, ... per profile) running on the model profiles the owner configured (see list_models). Workflow: list_repos / list_models once -> delegate_task -> poll task_status every 30-60 s until terminal -> task_result (small structured summary) -> optionally task_details for the diff or logs -> review/merge the branch yourself -> cleanup_task. Workers never commit, merge or push; changes stay uncommitted in the task's worktree.",
+})
+
+let ready = null
+const secrets = {}
+for (const k of secretEnvNames(daemonConfig())) if (process.env[k]) secrets[k] = process.env[k]
+const hasSecrets = Object.keys(secrets).length > 0
+
+// Offer credentials held by this shim to the daemon (in memory only) before each call, so a
+// daemon that was (re)started from an environment without them still gets them. Idempotent.
+async function offer() {
+  if (hasSecrets) await rpc("offer_env", { env: secrets }, { caller }).catch(() => {})
+}
+
+async function call(method, params) {
+  ready ??= ensureDaemon().catch((e) => {
+    ready = null
+    throw e
+  })
+  await ready
+  try {
+    await offer()
+    return await rpc(method, params, { caller })
+  } catch (e) {
+    if (e.code === "ECONNREFUSED" || e.code === "ENOENT" || e.code === "NOTOKEN" || e.code === "ECONNRESET") {
+      ready = null
+      await ensureDaemon()
+      await offer()
+      return await rpc(method, params, { caller })
+    }
+    throw e
+  }
+}
+
+function tool(name, description, shape, method = name) {
+  server.registerTool(name, { description, inputSchema: shape }, async (args) => {
+    try {
+      const result = await call(method, args)
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+    } catch (e) {
+      return { isError: true, content: [{ type: "text", text: `workhorse error: ${e.message}` }] }
+    }
+  })
+}
+
+const taskId = z.string().regex(/^wh-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$/).describe("Task id returned by delegate_task, e.g. wh-20260926-171500-ab12")
+
+tool("list_repos", "List the repositories a worker may be delegated to (allowlist), with default base branch and the default/allowed test commands. Only these names are accepted by delegate_task.", {})
+
+tool("list_models", "List the worker model profiles configured by the owner, with backend (coding-agent CLI), model, fallback chain, availability (credentials present, backend installed), the default profile, modes, backends, and limits (max concurrent tasks, timeout range, stall timeout).", {})
+
+tool(
+  "delegate_task",
+  "Start a coding task in the background. The daemon creates a fresh git worktree on branch workhorse/<task_id> from base_ref, runs the profile's coding-agent backend there (sandboxed: edits and shell only inside the worktree, no commits/pushes; see list_models for per-backend limits), then runs the tests itself and builds a structured result. Returns immediately with task_id; poll task_status, then call task_result. Tasks beyond the concurrency limit wait in a queue.",
+  {
+    repo: z.string().max(64).describe("Repository name from list_repos (not a path or URL)"),
+    task: z.string().min(1).max(20000).describe("Self-contained instructions: goal, relevant files/functions, constraints, acceptance criteria. The worker sees nothing else from your conversation."),
+    profile: z.string().max(32).optional().describe("Model profile name from list_models. Omit to use the configured default profile."),
+    test_command: z.string().max(500).optional().describe("Test command to verify the work. Must equal the repo's default test command or match its allowed patterns (see list_repos). Omit to use the repo default."),
+    base_ref: z.string().max(200).optional().describe("Branch, tag or commit to start from (default: repo default branch). In review mode without review_task_id: the branch to review."),
+    timeout_minutes: z.number().min(0).max(1440).optional().describe("Wall-clock limit for the worker run (default and allowed range: see list_models)."),
+    mode: z.enum(["implement", "review"]).optional().describe("'implement' (default) edits code. 'review' runs a read-only reviewer on a copy of another task's diff (review_task_id) or on base_ref's commits."),
+    review_task_id: taskId.optional().describe("With mode='review': the finished task whose diff should be reviewed."),
+  },
+)
+
+tool("task_status", "Cheap progress check for a task: status (queued, running, retry_wait, testing, completed, failed, timeout, stalled, cancelled, interrupted), phase, elapsed time, seconds since last worker activity, turn/tool counts, and verdict once finished.", { task_id: taskId })
+
+tool(
+  "task_result",
+  "Structured result of a finished task (small): verdict (success, tests_failed, no_changes, success_untested, worker_error, timeout, stalled, cancelled, interrupted, blocked, integrity_violation), worker summary, files_changed + diffstat, daemon-run test results, errors, remaining_concerns, branch/worktree/diff_path, timings, token usage/cost, activity counts. Use task_details for the full diff or logs.",
+  { task_id: taskId },
+)
+
+tool(
+  "task_details",
+  "Paged raw material for a task, fetched on demand with a size cap. kind: 'diff' (unified patch vs base), 'activity' (condensed log of every tool call/message), 'test_log' (daemon test output), 'final_message' (worker's last message), 'raw_events' (the backend CLI's JSON events), 'stderr'. Use offset/next_offset to page.",
+  {
+    task_id: taskId,
+    kind: z.enum(["diff", "activity", "test_log", "final_message", "raw_events", "stderr"]).optional().describe("Default 'activity'"),
+    offset: z.number().int().min(0).optional().describe("Byte offset (use next_offset from the previous page)"),
+    max_bytes: z.number().int().min(1024).max(65536).optional().describe("Page size in bytes (default 16384, max 65536)"),
+    run: z.number().int().min(1).optional().describe("For raw_events/stderr: which run (default latest)"),
+  },
+)
+
+tool(
+  "continue_task",
+  "Send follow-up instructions to a finished (or failed/timed-out/interrupted/cancelled) task. The worker resumes the same agent session in the same worktree (when the profile uses the same backend; otherwise a fresh session in the same worktree), then tests and the result are recomputed. Use it for fixes after your review instead of starting over.",
+  {
+    task_id: taskId,
+    instructions: z.string().min(1).max(20000).describe("What to change or fix next"),
+    timeout_minutes: z.number().min(0).max(1440).optional(),
+    profile: z.string().max(32).optional().describe("Optionally switch model profile for this follow-up"),
+  },
+)
+
+tool("cancel_task", "Stop a queued or running task. The worktree and partial changes are kept (inspect with task_result / task_details; resume with continue_task).", { task_id: taskId })
+
+tool(
+  "list_tasks",
+  "List recent tasks (newest first) with status and verdict.",
+  {
+    status: z.string().max(20).optional().describe("Filter: a status name, 'active' or 'terminal'"),
+    repo: z.string().max(64).optional(),
+    limit: z.number().int().min(1).max(200).optional().describe("Default 20"),
+  },
+)
+
+tool(
+  "cleanup_task",
+  "Remove a finished task's worktree and workhorse/<task_id> branch after you have reviewed/merged it. Refuses if the changes are not present on the repo's default branch, unless discard_unmerged_changes=true. The patch is always archived (diff_path) first.",
+  {
+    task_id: taskId,
+    discard_unmerged_changes: z.boolean().optional().describe("Set true only to deliberately throw away unmerged work"),
+  },
+)
+
+await server.connect(new StdioServerTransport())
