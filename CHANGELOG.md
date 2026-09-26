@@ -49,6 +49,12 @@ can resume it without guessing.
 - `cancel_task` on a parked task closes it (status `cancelled`, handoff `closed`).
 - `list_tasks status: "terminal"` also includes parked tasks, since no worker is running.
 
+### Fixed
+- Audit log: the `run_started` event's run kind (`initial`, `continue`, `retry`, `fallback`) overwrote
+  the record's `kind` (`task`). It is now `run_kind`. Reserved audit fields (`ts`, `kind`, and
+  `task_id`, `event`, `status` on task events) can no longer be overwritten by event data. A clashing
+  key is kept as `data_<key>`.
+
 ### Compatibility
 - Existing statuses, verdicts and tool arguments are unchanged. A parked task's verdict is the existing
   `blocked`. Tasks that used to end as `completed` + `blocked` are now `needs_approval` + `blocked` when

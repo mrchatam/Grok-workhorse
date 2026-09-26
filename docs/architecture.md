@@ -83,9 +83,19 @@ worktrees/<repo>/<id>/    one worktree per task (branch workhorse/<id>)
 tasks/<id>/               task.json (incl. result + handoff), activity.log, run-N.events.jsonl, run-N.stderr.log, diff.patch, test.log
 backend-data/<id>/        per-task agent data (session DB, snapshots, per-task settings)
 kilo-home/, opencode-home/  backend HOMEs (config/code dirs root-owned after lock-config)
-logs/                     daemon.log, audit.jsonl
+logs/                     daemon.log, audit.jsonl (one JSON object per line: ts, kind, then event fields)
 run/                      socket, token, pid files (0700)
 ```
+
+## Audit log
+
+`logs/audit.jsonl` is append-only JSONL, redacted like everything else. Every record starts with `ts`
+and `kind` (`rpc`, `rpc_denied`, `task`, `credential`, `retention`, `daemon`, `error`). Task records also
+carry `task_id`, `event` (`created`, `run_started`, `run_exited`, `finished`, `parked`,
+`handoff_updated`, `approval`, `closed`, `cleanup`, …) and the task's `status`. Those fields are
+reserved: if event data uses one of them, the reserved value wins and the data value is kept as
+`data_<key>`. `run_started` records the run kind (`initial`, `continue`, `retry`, `fallback`) as
+`run_kind`.
 
 ## Retries and fallback
 

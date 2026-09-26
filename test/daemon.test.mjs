@@ -307,4 +307,8 @@ H.itest("audit log records tool calls and lifecycle events", async () => {
   assert.ok(lines.some((l) => l.kind === "rpc" && l.method === "delegate_task" && l.ok === false))
   assert.ok(lines.some((l) => l.kind === "task" && l.event === "finished"))
   assert.ok(lines.some((l) => l.kind === "task" && l.event === "cleanup"))
+  // run kinds are recorded as run_kind and never replace the audit record kind
+  assert.ok(lines.some((l) => l.kind === "task" && l.event === "run_started" && l.run_kind === "initial"))
+  assert.ok(lines.some((l) => l.kind === "task" && l.event === "run_started" && l.run_kind === "continue"))
+  assert.ok(!lines.some((l) => ["initial", "continue", "retry", "fallback"].includes(l.kind)))
 })
