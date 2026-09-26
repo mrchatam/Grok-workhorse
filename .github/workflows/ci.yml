@@ -24,7 +24,10 @@ jobs:
         run: for f in scripts/*.sh; do bash -n "$f"; done
       - name: Unit tests (no backend CLI, no network, live tests skipped)
         run: npm run test:unit
-      - name: Integration/live tests are skipped without a backend CLI
+      - name: Integration tests with the test-only stub backend (real daemon, scripted worker; git + python3)
+        run: npm run test:stub
+      - name: Remaining test files (Kilo/OpenCode integration + live tests skip without a backend CLI)
         env:
           WH_SKIP_INTEGRATION: "1"
-        run: node --test test/*.test.mjs
+          WH_SKIP_STUB: "1"
+        run: node --test --test-timeout=600000 test/*.test.mjs

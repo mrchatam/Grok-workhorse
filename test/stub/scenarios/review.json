@@ -1,0 +1,37 @@
+{
+ "runs": [
+  [
+   {
+    "if_model": "stub/reviewer",
+    "then": [
+     {
+      "bash": "git diff HEAD --stat"
+     },
+     {
+      "tokens": {
+       "input": 3000,
+       "output": 150
+      }
+     },
+     {
+      "text": "Review.\n\n## RESULT\nstatus: done\nsummary: request changes: divide should document the float return\nfiles_changed: none\ntests: none\nconcerns: calc/core.py:18 divide docstring does not mention float rounding; no test for negative operands"
+     }
+    ],
+    "else": [
+     {
+      "write": {
+       "path": "calc/core.py",
+       "content": "\"\"\"Arithmetic helpers.\"\"\"\n\n\ndef add(a, b):\n    return a + b\n\n\ndef subtract(a, b):\n    return a - b\n\n\ndef multiply(a, b):\n    \"\"\"Return a * b.\"\"\"\n    return a * b\n\n\ndef divide(a, b):\n    \"\"\"Return a / b as a float.\n\n    Raises ZeroDivisionError with the message \"cannot divide by zero\" when b == 0.\n    \"\"\"\n    if b == 0:\n        raise ZeroDivisionError(\"cannot divide by zero\")\n    return a / b\n"
+      }
+     },
+     {
+      "bash": "python3 -m unittest tests.test_core -v"
+     },
+     {
+      "text": "Done.\n\n## RESULT\nstatus: done\nsummary: Implemented multiply and divide in calc/core.py.\nfiles_changed: calc/core.py\ntests: python3 -m unittest tests.test_core -v -> ran\nconcerns: none"
+     }
+    ]
+   }
+  ]
+ ]
+}

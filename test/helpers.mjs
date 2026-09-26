@@ -208,3 +208,79 @@ export function git(cwd, ...args) {
 
 // HOME of the backend under test.
 export const TEST_HOME = TEST_BACKEND === "opencode" ? TEST_OPENCODE_HOME : TEST_KILO_HOME
+
+// ---------- stub backend (test-only scripted worker; runs anywhere with git + python3, e.g. CI) ----------
+export const STUB_CLI = path.join(APP, "adapters/stub/stub-cli.mjs")
+export const STUB_SKIP = (() => {
+  if (process.env.WH_SKIP_STUB) return "WH_SKIP_STUB is set"
+  for (const b of ["git", "python3"]) if (spawnSync(b, ["--version"]).status !== 0) return `${b} not found`
+  return null
+})()
+export const stest = (name, opts, fn) => (typeof opts === "function" ? test(name, { skip: STUB_SKIP || false }, opts) : test(name, { ...opts, skip: STUB_SKIP || opts.skip || false }, fn))
+export const STUB_TEST_CMD = "python3 -m unittest tests.test_core -v"
+
+export function stubProfiles(extra = {}) {
+  const price = (i, o) => ({ input: i, output: o })
+  return {
+    providers: { stub: { max_concurrent: 6, models: { cheap: {}, mid: {}, strong: {}, reviewer: {}, flaky: {}, sleepy: {} } } },
+    profiles: {
+      cheap: { backend: "stub", model: "stub/cheap", escalate_to: "mid", price_per_mtok: price(0.1, 0.4) },
+      mid: { backend: "stub", model: "stub/mid", escalate_to: "strong", price_per_mtok: price(0.5, 2) },
+      strong: { backend: "stub", model: "stub/strong", price_per_mtok: price(3, 15) },
+      reviewer: { backend: "stub", model: "stub/reviewer", price_per_mtok: price(0.1, 0.4) },
+      flaky: { backend: "stub", model: "stub/flaky", fallback: ["cheap"] },
+      sleepy: { backend: "stub", model: "stub/sleepy", stall_minutes: 0.03 },
+    },
+    default_profile: "cheap",
+    presets: { "quick-fix": { description: "small bounded fix", profile: "cheap", size: "small", timeout_minutes: 3, test_command: STUB_TEST_CMD, instructions: "Keep the diff minimal." } },
+    routing: { small: "cheap", medium: "mid", large: "strong" },
+    ...extra,
+  }
+}
+
+// Isolated env for the stub backend: no worker/test sandbox, no LLM. Must run before importing lib/client.mjs.
+export async function setupStubEnv(name, daemonOverrides = {}) {
+  if (STUB_SKIP) return null
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `kwt-stub-${name}-`))
+  const cfgDir = path.join(root, "config")
+  const dataDir = path.join(root, "data")
+  fs.mkdirSync(cfgDir, { recursive: true })
+  fs.mkdirSync(path.join(dataDir, "repos"), { recursive: true })
+  const repoPath = path.join(dataDir, "repos", REPO_NAME)
+  execFileSync("git", ["clone", "-q", exampleRepoSource(), repoPath])
+  const daemon = {
+    max_concurrent: 4,
+    timeouts: { default_min: 5, min_min: 0.05, max_min: 30, stall_min: 5, test_min: 2, kill_grace_sec: 2 },
+    retry: { max_retries: 1, backoff_sec: [1], provider_cooldown_sec: 0 },
+    retention: { enabled: false, worktree_days: 7, task_days: 30 },
+    default_backend: "stub",
+    backends: { stub: { bin: STUB_CLI, home: path.join(root, "stub-home"), scenarios_dir: path.join(APP, "test/stub/scenarios") } },
+    worker_sandbox: { enabled: false },
+    test_sandbox: { enabled: false },
+    min_mem_available_mb: 0,
+    secret_env: [],
+    ...daemonOverrides,
+  }
+  fs.writeFileSync(path.join(cfgDir, "daemon.json"), JSON.stringify(daemon, null, 2))
+  fs.writeFileSync(path.join(cfgDir, "repos.json"), JSON.stringify({
+    repos: {
+      [REPO_NAME]: {
+        description: "test clone", path: repoPath, default_base: "main", test_command: STUB_TEST_CMD,
+        allowed_test_commands: ["^python3 -m unittest( -v| -q)?( discover -s tests( -v| -q)?|( tests(\\.[A-Za-z0-9_]+)+)+( -v| -q)?)?$"],
+      },
+    },
+  }))
+  fs.writeFileSync(path.join(cfgDir, "profiles.json"), JSON.stringify(stubProfiles(), null, 2))
+  process.env.WH_CONFIG_DIR = cfgDir
+  process.env.WH_DATA_DIR = dataDir
+  return { root, cfgDir, dataDir, repoPath }
+}
+
+// Messages the stub worker received for a task (one per run).
+export function stubMessages(env, id) {
+  try {
+    return fs.readFileSync(path.join(env.dataDir, "backend-data", id, "messages.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+  } catch {
+    return []
+  }
+}
