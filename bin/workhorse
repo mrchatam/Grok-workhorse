@@ -13,9 +13,19 @@ Service:
   status                          quick daemon status (exit 1 if not running)
   health [--json]                 full check for a daily cron/agent run (exit 1 on any FAIL)
   logs [N] | audit [N]            tail daemon.log / audit.jsonl
-  tasks [N]                       recent tasks
-  cleanup-old [--days N] [--task-days N] [--dry-run]
-                                  remove finished worktrees older than N days (default: daemon.json retention)
+  tasks [N] [--status S] [--owner O]
+                                  recent tasks (S: a status, active, terminal, parked, needs_attention)
+  attention [N]                   tasks that need someone: parked (needs_approval) or handoff not done/closed
+  cleanup-old [--days N] [--task-days N] [--parked-days N] [--dry-run]
+                                  remove finished worktrees older than N days (default: daemon.json retention;
+                                  parked tasks are kept unless --parked-days / retention.parked_days is set)
+Handoff and approval:
+  handoff <task_id> [--state S] [--owner O] [--next "<action>"] [--note "<text>"] [--by NAME]
+                                  show the task's handoff record, or update it when options are given
+  approve <task_id> [--instructions "<text>"] [--note "<text>"] [--timeout MIN] [--profile P] [--by NAME]
+                                  approve a parked/blocked task and resume it in the same session + worktree
+  reject <task_id> [--instructions "<text>"] [--note "<text>"] [--by NAME]
+                                  deny it: close the task, or resume with --instructions (do something else)
 Config (the config dir is root-owned once locked: use sudo for these):
   repos                           show the allowlist
   add-repo <git-url|path> [--name N] [--test "<cmd>"] [--allow-test "<regex>"]... [--base BRANCH]
@@ -123,13 +133,39 @@ try {
       out(execFileSync("tail", ["-n", rest[0] || "20", path.join(dirs.logs, "audit.jsonl")]).toString())
       break
     case "tasks":
-      out(await rpc("list_tasks", { limit: Number(rest[0]) || 20 }))
+    case "attention": {
+      const f = flags(rest, { status: "str", owner: "str" })
+      const status = cmd === "attention" ? "needs_attention" : f.status
+      out(await rpc("list_tasks", { limit: Number(f._[0]) || 20, ...(status ? { status } : {}), ...(f.owner ? { owner: f.owner } : {}) }))
       break
+    }
+    case "handoff": {
+      const f = flags(rest, { state: "str", owner: "str", next: "str", note: "str", by: "str" })
+      const id = f._[0]
+      if (!id) throw new Error("usage: workhorse handoff <task_id> [--state S] [--owner O] [--next \"<action>\"] [--note \"<text>\"] [--by NAME]")
+      const upd = { ...(f.state ? { state: f.state } : {}), ...(f.owner ? { owner: f.owner } : {}), ...(f.next ? { next_action: f.next } : {}), ...(f.note ? { note: f.note } : {}) }
+      const caller = { caller: { client: "workhorse" } }
+      out(Object.keys(upd).length ? await rpc("update_handoff", { task_id: id, ...upd, ...(f.by ? { by: f.by } : {}) }, caller) : await rpc("get_handoff", { task_id: id }, caller))
+      break
+    }
+    case "approve":
+    case "reject": {
+      const f = flags(rest, { instructions: "str", note: "str", timeout: "str", profile: "str", by: "str" })
+      const id = f._[0]
+      if (!id) throw new Error(`usage: workhorse ${cmd} <task_id> [--instructions "<text>"] [--note "<text>"]`)
+      out(await rpc("approve_task", {
+        task_id: id, decision: cmd,
+        ...(f.instructions ? { instructions: f.instructions } : {}), ...(f.note ? { note: f.note } : {}),
+        ...(f.timeout ? { timeout_minutes: Number(f.timeout) } : {}), ...(f.profile ? { profile: f.profile } : {}), ...(f.by ? { by: f.by } : {}),
+      }, { caller: { client: "workhorse" } }))
+      break
+    }
     case "cleanup-old": {
-      const f = flags(rest, { days: "str", "task-days": "str", "dry-run": "bool" })
+      const f = flags(rest, { days: "str", "task-days": "str", "parked-days": "str", "dry-run": "bool" })
       out(await rpc("cleanup_old", {
         ...(f.days !== undefined ? { worktree_days: Number(f.days) } : {}),
         ...(f["task-days"] !== undefined ? { task_days: Number(f["task-days"]) } : {}),
+        ...(f["parked-days"] !== undefined ? { parked_days: Number(f["parked-days"]) } : {}),
         dry_run: !!f["dry-run"],
       }, { caller: { client: "workhorse" }, timeoutMs: 600000 }))
       break
