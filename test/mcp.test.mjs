@@ -37,7 +37,7 @@ after(async () => {
 H.itest("tools are exposed with schemas", async () => {
   const c = await mkClient()
   const { tools } = await c.listTools()
-  assert.deepEqual(tools.map((t) => t.name).sort(), ["cancel_task", "cleanup_task", "continue_task", "delegate_task", "list_models", "list_repos", "list_tasks", "task_details", "task_result", "task_status"])
+  assert.deepEqual(tools.map((t) => t.name).sort(), ["approve_task", "cancel_task", "cleanup_task", "continue_task", "delegate_task", "list_models", "list_repos", "list_tasks", "task_details", "task_result", "task_status", "update_handoff"])
   for (const t of tools) assert.ok(t.description.length > 40, t.name)
   await c.close()
 })

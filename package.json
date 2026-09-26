@@ -26,7 +26,7 @@
   "scripts": {
     "setup": "npm ci && npm ci --prefix adapters/kilo/config && npm ci --prefix adapters/opencode/config",
     "test": "node --test --test-timeout=600000 test/*.test.mjs",
-    "test:unit": "node --test test/unit.test.mjs test/config.test.mjs test/adapters.test.mjs",
+    "test:unit": "node --test test/unit.test.mjs test/config.test.mjs test/adapters.test.mjs test/handoff.test.mjs test/handoff-flow.test.mjs",
     "test:live": "WH_LIVE_TEST=1 node --test --test-timeout=1800000 test/live.test.mjs"
   },
   "engines": {
