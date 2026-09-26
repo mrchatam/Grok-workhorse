@@ -91,11 +91,14 @@ The verdict stays `blocked`, so the existing verdict set is unchanged. A parked 
 - is not closed. It appears in `list_tasks` with `status: "needs_approval"`, `"parked"`,
   `"needs_attention"` and `"terminal"`.
 - keeps its worktree. Retention sweeps skip parked tasks unless `retention.parked_days` (or
-  `cleanup_old parked_days` / `workhorse cleanup-old --parked-days N`) is set. Even then, only the
-  worktree is removed, counted from the last handoff update, and the task record is never purged
-  automatically. `workhorse health` reports `parked_tasks`, `oldest_parked_days` and `needs_attention`.
+  `cleanup_old parked_days` / `workhorse cleanup-old --parked-days N`) is set. When it is set, a task
+  parked longer than that (counted from the last handoff update) loses its worktree (the diff is
+  archived) and is closed (`updated_by: "retention"`). After that it follows normal retention. A parked
+  task record is never purged. `workhorse health` reports `parked_tasks`, `oldest_parked_days` and
+  `needs_attention`.
 - can be resumed with `continue_task`, answered with `approve_task`, closed with `approve_task
-  decision=reject` or `cancel_task`, or cleaned up explicitly with `cleanup_task`.
+  decision=reject` or `cancel_task`, or cleaned up explicitly with `cleanup_task`. Cleaning up also
+  closes it.
 
 `list_tasks` with `status: "needs_attention"` returns parked tasks plus every finished task whose
 handoff state is not `done` or `closed` (failed tests, retryable timeouts, blockers, …).

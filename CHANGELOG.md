@@ -23,8 +23,9 @@ can resume it without guessing.
   `list_tasks` return a summary. Tasks finished before 0.2.0 get a derived record on the fly.
 - **Parked status `needs_approval`**: the task waits for a human decision when the worker reports
   `status: needs_approval` / `needs_input`, or `blocked` with a request or after blocked tool calls.
-  No worker runs. `task_status` reports `terminal: true, parked: true`. The worktree is kept by retention
-  unless `retention.parked_days` is set, and even then the task record is never purged automatically.
+  No worker runs. `task_status` reports `terminal: true, parked: true`. Retention keeps the worktree
+  unless `retention.parked_days` is set. With it set, expired parked tasks lose their worktree (the
+  diff is archived) and are closed. `cleanup_task` on a parked task also closes it.
 - MCP tools `update_handoff` (owner, next_action, state, note; state `needs_approval` / `needs_input`
   parks a task and any other state unparks it) and `approve_task` (`approve` resumes through the
   continue path with the approval noted, and `reject` closes the task or redirects it with
