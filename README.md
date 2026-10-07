@@ -269,3 +269,6 @@ The worker skills in `adapters/kilo/config/skills/` are vendored (unmodified, so
 projects of their respective authors. The `terse` and `minimal_code` token-saver fragments are our own
 wording, inspired by Caveman and Ponytail (both MIT); the optional RTK integration calls the separately
 installed RTK binary (Apache-2.0). See [NOTICE](NOTICE).
+
+
+[![M8ven Score](https://m8ven.ai/badge/mcp/mrchatam/grok-workhorse)](https://m8ven.ai/mcp/mrchatam/grok-workhorse?s=readme)
