@@ -270,5 +270,6 @@ projects of their respective authors. The `terse` and `minimal_code` token-saver
 wording, inspired by Caveman and Ponytail (both MIT); the optional RTK integration calls the separately
 installed RTK binary (Apache-2.0). See [NOTICE](NOTICE).
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/mrchatam-grok-workhorse-1ma7qr?v=ffd6d76192d89e0e6d4add358eb1675e)](https://m8ven.ai/mcp/mrchatam-grok-workhorse-1ma7qr?s=readme)
 
 [![M8ven Score](https://m8ven.ai/badge/mcp/mrchatam/grok-workhorse)](https://m8ven.ai/mcp/mrchatam/grok-workhorse?s=readme)
