@@ -23,7 +23,7 @@ test("parseTestOutput understands unittest/pytest/node", () => {
 })
 
 test("detectTestCommand finds python unittest layout", () => {
-  assert.equal(detectTestCommand(new URL("./fixtures/example-repo", import.meta.url).pathname), "python3 -m unittest discover -s tests -v")
+  assert.equal(detectTestCommand(new URL("./fixtures/example-repo", import.meta.url).pathname.replaceAll("%20", " ")), "python3 -m unittest discover -s tests -v")
 })
 
 test("repo name and ref validation reject traversal/injection", () => {

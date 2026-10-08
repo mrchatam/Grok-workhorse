@@ -12,7 +12,7 @@ const cfgDir = path.join(root, "config")
 fs.mkdirSync(cfgDir)
 process.env.WH_CONFIG_DIR = cfgDir
 process.env.WH_DATA_DIR = path.join(root, "data")
-const APP = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
+const APP = path.resolve(path.dirname(new URL(import.meta.url).pathname.replaceAll("%20", " ")), "..")
 for (const f of ["profiles.nvidia.json", "profiles.openrouter.json"]) fs.copyFileSync(path.join(APP, "config/examples", f), path.join(cfgDir, f))
 fs.copyFileSync(path.join(APP, "config/examples/profiles.nvidia.json"), path.join(cfgDir, "profiles.json"))
 fs.writeFileSync(path.join(cfgDir, "daemon.json"), JSON.stringify({ secret_env: ["EXTRA_TOKEN"], allowed_clone_hosts: ["github.com", "gitlab.example.org"] }))

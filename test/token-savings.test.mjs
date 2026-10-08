@@ -14,7 +14,7 @@ const cfgDir = path.join(root, "config")
 fs.mkdirSync(cfgDir, { recursive: true })
 process.env.WH_CONFIG_DIR = cfgDir
 process.env.WH_DATA_DIR = path.join(root, "data")
-const APP = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
+const APP = path.resolve(path.dirname(new URL(import.meta.url).pathname.replaceAll("%20", " ")), "..")
 
 const { briefResult } = await import("../lib/views.mjs")
 const { usageReport, dayOf } = await import("../lib/usage.mjs")
